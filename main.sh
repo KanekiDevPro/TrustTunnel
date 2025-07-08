@@ -875,6 +875,8 @@ add_new_client_action() {
             esac
         done
     fi
+
+    echo ""
     
     # Determine mapping arguments based on tunnel mode
     local mapping_args=""
@@ -1031,13 +1033,16 @@ delete_client_menu() {
                 echo ""
                 echo -e "${YELLOW}Do you want to close the client ports in firewall? (y/N):${RESET} "
                 read -r close_ports_choice
-                
+
                 if [[ "$close_ports_choice" =~ ^[Yy]$ ]]; then
-                    # Try to extract ports from service file before deletion
-                    if [ -f "$service_file" ]; then
-                        # Extract mapping arguments from service file
-                        local tcp_mappings=$(grep -o '\--tcp-mappings "[^"]*"' "$service_file" | sed 's/--tcp-mappings "//;s/"//')
-                        local udp_mappings=$(grep -o '\--udp-mappings "[^"]*"' "$service_file" | sed 's/--udp-mappings "//;s/"//')
+                    # Extract ports from service file content before it was deleted
+                    local service_content=$(sudo systemctl cat "$selected_service" 2>/dev/null || echo "")
+                    
+                    if [ -n "$service_content" ]; then
+                        # Extract TCP mappings
+                        local tcp_mappings=$(echo "$service_content" | grep -o '\--tcp-mappings "[^"]*"' | sed 's/--tcp-mappings "//;s/"//')
+                        # Extract UDP mappings  
+                        local udp_mappings=$(echo "$service_content" | grep -o '\--udp-mappings "[^"]*"' | sed 's/--udp-mappings "//;s/"//')
                         
                         # Close TCP ports
                         if [ -n "$tcp_mappings" ]; then
@@ -1056,6 +1061,10 @@ delete_client_menu() {
                                 close_firewall_port "$port" "udp"
                             done
                         fi
+                        
+                        print_success "Client ports closed in firewall"
+                    else
+                        print_warning "Could not extract port information to close firewall ports"
                     fi
                 fi
             else
