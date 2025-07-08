@@ -1093,6 +1093,279 @@ delete_client_menu() {
     read -r
 }
 
+# Function to show server status
+show_server_status() {
+    clear
+    echo ""
+    draw_line "$CYAN" "=" 40
+    echo -e "${CYAN}        📊 TrustTunnel Server Status${RESET}"
+    draw_line "$CYAN" "=" 40
+    echo ""
+    
+    local service_file="/etc/systemd/system/trusttunnel.service"
+    
+    if [ -f "$service_file" ]; then
+        echo -e "${CYAN}🔍 Service Information:${RESET}"
+        echo -e "${WHITE}Service Name: trusttunnel.service${RESET}"
+        echo ""
+        
+        # Check service status
+        if systemctl is-active --quiet trusttunnel.service; then
+            echo -e "${GREEN}🟢 Status: Active (Running)${RESET}"
+        else
+            echo -e "${RED}🔴 Status: Inactive (Stopped)${RESET}"
+        fi
+        
+        if systemctl is-enabled --quiet trusttunnel.service; then
+            echo -e "${GREEN}🟢 Enabled: Yes (Auto-start on boot)${RESET}"
+        else
+            echo -e "${YELLOW}🟡 Enabled: No (Manual start only)${RESET}"
+        fi
+        
+        echo ""
+        echo -e "${CYAN}📋 Detailed Status:${RESET}"
+        sudo systemctl status trusttunnel.service --no-pager -l
+        
+        echo ""
+        echo -e "${CYAN}🔧 Service Configuration:${RESET}"
+        
+        # Extract configuration from service file
+        local exec_start=$(grep "ExecStart=" "$service_file" | cut -d'=' -f2-)
+        if [ -n "$exec_start" ]; then
+            echo -e "${WHITE}Command: $exec_start${RESET}"
+            
+            # Extract ports from command
+            local listen_port=$(echo "$exec_start" | grep -o '\--addr [^:]*:$$[0-9]*$$' | cut -d':' -f2)
+            local tcp_port=$(echo "$exec_start" | grep -o '\--tcp-upstream $$[0-9]*$$' | awk '{print $2}')
+            local udp_port=$(echo "$exec_start" | grep -o '\--udp-upstream $$[0-9]*$$' | awk '{print $2}')
+            
+            echo ""
+            echo -e "${CYAN}🔌 Port Configuration:${RESET}"
+            [ -n "$listen_port" ] && echo -e "${WHITE}Listen Port: $listen_port${RESET}"
+            [ -n "$tcp_port" ] && echo -e "${WHITE}TCP Upstream: $tcp_port${RESET}"
+            [ -n "$udp_port" ] && echo -e "${WHITE}UDP Upstream: $udp_port${RESET}"
+        fi
+        
+        echo ""
+        echo -e "${CYAN}🔥 Firewall Status:${RESET}"
+        check_firewall_ports "$listen_port" "$tcp_port" "$udp_port"
+        
+    else
+        print_error "Server service not found"
+        echo -e "${YELLOW}No TrustTunnel server is configured${RESET}"
+    fi
+    
+    echo ""
+    echo -e "${YELLOW}Press Enter to return to previous menu...${RESET}"
+    read -r
+}
+
+# Function to show client status
+show_client_status() {
+    clear
+    echo ""
+    draw_line "$CYAN" "=" 40
+    echo -e "${CYAN}        📊 TrustTunnel Client Status${RESET}"
+    draw_line "$CYAN" "=" 40
+    echo ""
+    
+    echo -e "${CYAN}🔍 Searching for client services...${RESET}"
+    mapfile -t services < <(systemctl list-units --type=service --all | grep 'trusttunnel-' | awk '{print $1}' | sed 's/.service$//')
+    
+    if [ ${#services[@]} -eq 0 ]; then
+        print_error "No client services found"
+        echo -e "${YELLOW}No TrustTunnel clients are configured${RESET}"
+    else
+        echo -e "${CYAN}📋 Client Services Overview:${RESET}"
+        echo ""
+        
+        for service in "${services[@]}"; do
+            echo -e "${WHITE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+            echo -e "${CYAN}🔧 Service: $service${RESET}"
+            
+            # Check service status
+            if systemctl is-active --quiet "$service"; then
+                echo -e "${GREEN}🟢 Status: Active (Running)${RESET}"
+            else
+                echo -e "${RED}🔴 Status: Inactive (Stopped)${RESET}"
+            fi
+            
+            if systemctl is-enabled --quiet "$service"; then
+                echo -e "${GREEN}🟢 Enabled: Yes${RESET}"
+            else
+                echo -e "${YELLOW}🟡 Enabled: No${RESET}"
+            fi
+            
+            # Extract configuration
+            local service_file="/etc/systemd/system/${service}.service"
+            if [ -f "$service_file" ]; then
+                local exec_start=$(grep "ExecStart=" "$service_file" | cut -d'=' -f2-)
+                
+                # Extract server address
+                local server_addr=$(echo "$exec_start" | grep -o '\--server-addr [^ ]*' | cut -d' ' -f2)
+                [ -n "$server_addr" ] && echo -e "${WHITE}🌐 Server: $server_addr${RESET}"
+                
+                # Extract mappings
+                local tcp_mappings=$(echo "$exec_start" | grep -o '\--tcp-mappings "[^"]*"' | sed 's/--tcp-mappings "//;s/"//')
+                local udp_mappings=$(echo "$exec_start" | grep -o '\--udp-mappings "[^"]*"' | sed 's/--udp-mappings "//;s/"//')
+                
+                if [ -n "$tcp_mappings" ]; then
+                    echo -e "${WHITE}🔌 TCP Ports: ${tcp_mappings//,/ }${RESET}"
+                fi
+                
+                if [ -n "$udp_mappings" ]; then
+                    echo -e "${WHITE}🔌 UDP Ports: ${udp_mappings//,/ }${RESET}"
+                fi
+            fi
+            echo ""
+        done
+        
+        echo -e "${WHITE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        echo ""
+        echo -e "${CYAN}📊 Summary:${RESET}"
+        
+        local active_count=0
+        local total_count=${#services[@]}
+        
+        for service in "${services[@]}"; do
+            if systemctl is-active --quiet "$service"; then
+                ((active_count++))
+            fi
+        done
+        
+        echo -e "${WHITE}Total Clients: $total_count${RESET}"
+        echo -e "${GREEN}Active Clients: $active_count${RESET}"
+        echo -e "${RED}Inactive Clients: $((total_count - active_count))${RESET}"
+    fi
+    
+    echo ""
+    echo -e "${YELLOW}Press Enter to return to previous menu...${RESET}"
+    read -r
+}
+
+# Function to check firewall ports status
+check_firewall_ports() {
+    local listen_port="$1"
+    local tcp_port="$2"
+    local udp_port="$3"
+    local firewall_type=$(detect_firewall)
+    
+    case "$firewall_type" in
+        "ufw")
+            echo -e "${WHITE}Firewall Type: UFW${RESET}"
+            
+            if [ -n "$listen_port" ]; then
+                if sudo ufw status | grep -q "$listen_port/tcp"; then
+                    echo -e "${GREEN}🟢 Port $listen_port/tcp: Open${RESET}"
+                else
+                    echo -e "${RED}🔴 Port $listen_port/tcp: Closed${RESET}"
+                fi
+            fi
+            
+            if [ -n "$tcp_port" ] && [ "$tcp_port" != "$listen_port" ]; then
+                if sudo ufw status | grep -q "$tcp_port/tcp"; then
+                    echo -e "${GREEN}🟢 Port $tcp_port/tcp: Open${RESET}"
+                else
+                    echo -e "${RED}🔴 Port $tcp_port/tcp: Closed${RESET}"
+                fi
+            fi
+            
+            if [ -n "$udp_port" ] && [ "$udp_port" != "$listen_port" ] && [ "$udp_port" != "$tcp_port" ]; then
+                if sudo ufw status | grep -q "$udp_port/udp"; then
+                    echo -e "${GREEN}🟢 Port $udp_port/udp: Open${RESET}"
+                else
+                    echo -e "${RED}🔴 Port $udp_port/udp: Closed${RESET}"
+                fi
+            fi
+            ;;
+        "iptables")
+            echo -e "${WHITE}Firewall Type: iptables${RESET}"
+            
+            if [ -n "$listen_port" ]; then
+                if sudo iptables -L INPUT -n | grep -q "dpt:$listen_port"; then
+                    echo -e "${GREEN}🟢 Port $listen_port: Open${RESET}"
+                else
+                    echo -e "${RED}🔴 Port $listen_port: Closed${RESET}"
+                fi
+            fi
+            ;;
+        "none")
+            echo -e "${YELLOW}🟡 No firewall detected${RESET}"
+            ;;
+    esac
+}
+
+# Function to show all services status
+show_all_services_status() {
+    clear
+    echo ""
+    draw_line "$CYAN" "=" 50
+    echo -e "${CYAN}        📊 All TrustTunnel Services Status${RESET}"
+    draw_line "$CYAN" "=" 50
+    echo ""
+    
+    # Check server
+    echo -e "${CYAN}🖥️ SERVER STATUS:${RESET}"
+    local server_service="/etc/systemd/system/trusttunnel.service"
+    if [ -f "$server_service" ]; then
+        if systemctl is-active --quiet trusttunnel.service; then
+            echo -e "${GREEN}🟢 trusttunnel.service: Active${RESET}"
+        else
+            echo -e "${RED}🔴 trusttunnel.service: Inactive${RESET}"
+        fi
+    else
+        echo -e "${YELLOW}🟡 No server configured${RESET}"
+    fi
+    
+    echo ""
+    
+    # Check clients
+    echo -e "${CYAN}💻 CLIENT STATUS:${RESET}"
+    mapfile -t client_services < <(systemctl list-units --type=service --all | grep 'trusttunnel-' | awk '{print $1}' | sed 's/.service$//')
+    
+    if [ ${#client_services[@]} -eq 0 ]; then
+        echo -e "${YELLOW}🟡 No clients configured${RESET}"
+    else
+        for service in "${client_services[@]}"; do
+            if systemctl is-active --quiet "$service"; then
+                echo -e "${GREEN}🟢 $service: Active${RESET}"
+            else
+                echo -e "${RED}🔴 $service: Inactive${RESET}"
+            fi
+        done
+    fi
+    
+    echo ""
+    echo -e "${CYAN}📊 SUMMARY:${RESET}"
+    
+    local total_services=0
+    local active_services=0
+    
+    # Count server
+    if [ -f "$server_service" ]; then
+        ((total_services++))
+        if systemctl is-active --quiet trusttunnel.service; then
+            ((active_services++))
+        fi
+    fi
+    
+    # Count clients
+    for service in "${client_services[@]}"; do
+        ((total_services++))
+        if systemctl is-active --quiet "$service"; then
+            ((active_services++))
+        fi
+    done
+    
+    echo -e "${WHITE}Total Services: $total_services${RESET}"
+    echo -e "${GREEN}Active Services: $active_services${RESET}"
+    echo -e "${RED}Inactive Services: $((total_services - active_services))${RESET}"
+    
+    echo ""
+    echo -e "${YELLOW}Press Enter to return to main menu...${RESET}"
+    read -r
+}
+
 # Function to show server management menu
 server_management_menu() {
     while true; do
@@ -1104,8 +1377,9 @@ server_management_menu() {
         echo ""
         echo -e "  ${YELLOW}1)${RESET} ${WHITE}Add new server${RESET}"
         echo -e "  ${YELLOW}2)${RESET} ${WHITE}Show service logs${RESET}"
-        echo -e "  ${YELLOW}3)${RESET} ${WHITE}Delete service${RESET}"
-        echo -e "  ${YELLOW}4)${RESET} ${WHITE}Back to main menu${RESET}"
+        echo -e "  ${YELLOW}3)${RESET} ${WHITE}Show service status${RESET}"
+        echo -e "  ${YELLOW}4)${RESET} ${WHITE}Delete service${RESET}"
+        echo -e "  ${YELLOW}5)${RESET} ${WHITE}Back to main menu${RESET}"
         echo ""
         draw_line "$GREEN" "-" 40
         echo -e "${WHITE}Your choice:${RESET} "
@@ -1128,6 +1402,9 @@ server_management_menu() {
                 fi
                 ;;
             3)
+                show_server_status
+                ;;
+            4)
                 local service_file="/etc/systemd/system/trusttunnel.service"
                 if [ -f "$service_file" ]; then
                     echo -e "${RED}⚠️ Are you sure you want to delete the server service? (y/N):${RESET} "
@@ -1172,7 +1449,7 @@ server_management_menu() {
                 echo -e "${YELLOW}Press Enter to continue...${RESET}"
                 read -r
                 ;;
-            4)
+            5)
                 break
                 ;;
             *)
@@ -1196,8 +1473,9 @@ client_management_menu() {
         echo ""
         echo -e "  ${YELLOW}1)${RESET} ${WHITE}Add new client${RESET}"
         echo -e "  ${YELLOW}2)${RESET} ${WHITE}Show client logs${RESET}"
-        echo -e "  ${YELLOW}3)${RESET} ${WHITE}Delete a client${RESET}"
-        echo -e "  ${YELLOW}4)${RESET} ${WHITE}Back to main menu${RESET}"
+        echo -e "  ${YELLOW}3)${RESET} ${WHITE}Show client status${RESET}"
+        echo -e "  ${YELLOW}4)${RESET} ${WHITE}Delete a client${RESET}"
+        echo -e "  ${YELLOW}5)${RESET} ${WHITE}Back to main menu${RESET}"
         echo ""
         draw_line "$GREEN" "-" 40
         echo -e "${WHITE}Your choice:${RESET} "
@@ -1212,9 +1490,12 @@ client_management_menu() {
                 show_client_logs_menu
                 ;;
             3)
-                delete_client_menu
+                show_client_status
                 ;;
             4)
+                delete_client_menu
+                ;;
+            5)
                 break
                 ;;
             *)
