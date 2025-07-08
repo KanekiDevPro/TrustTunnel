@@ -8,237 +8,487 @@ BLUE='\033[0;34m'
 MAGENTA='\033[0;35m'
 CYAN='\033[0;36m'
 WHITE='\033[0;37m'
+BOLD_GREEN='\033[1;32m'
 RESET='\033[0m' # No Color
 
-# --- New: Uninstall TrustTunnel Action ---
-uninstall_trusttunnel_action() {
-  clear
-  echo ""
-  echo -e "${RED}⚠️ Are you sure you want to uninstall TrustTunnel and remove all associated files and services? (y/N): ${RESET}"
-  read -p "" confirm
-  echo ""
+# Global variables
+RUST_IS_READY=false
+CARGO_ENV_FILE="$HOME/.cargo/env"
 
-  if [[ "$confirm" =~ ^[Yy]$ ]]; then
-    echo "🧹 Uninstalling TrustTunnel..."
-
-    # Find and remove all trusttunnel-* services
-    echo "Searching for TrustTunnel services to remove..."
-    # List all unit files that start with 'trusttunnel-'
-    mapfile -t trusttunnel_services < <(sudo systemctl list-unit-files --full --no-pager | grep '^trusttunnel-.*\.service' | awk '{print $1}')
-
-    if [ ${#trusttunnel_services[@]} -gt 0 ]; then
-      echo "🛑 Stopping and disabling TrustTunnel services..."
-      for service_file in "${trusttunnel_services[@]}"; do
-        local service_name=$(basename "$service_file") # Get just the service name from the file path
-        echo "  - Processing $service_name..."
-        sudo systemctl stop "$service_name" > /dev/null 2>&1
-        sudo systemctl disable "$service_name" > /dev/null 2>&1
-        sudo rm -f "/etc/systemd/system/$service_name" > /dev/null 2>&1
-      done
-      sudo systemctl daemon-reload
-      print_success "All TrustTunnel services have been stopped, disabled, and removed."
-    else
-      echo "⚠️ No TrustTunnel services found to remove."
-    fi
-
-    # Remove rstun folder if exists
-    if [ -d "rstun" ]; then
-      echo "🗑️ Removing 'rstun' folder..."
-      rm -rf rstun
-      print_success "'rstun' folder removed successfully."
-    else
-      echo "⚠️ 'rstun' folder not found."
-    fi
-
-    print_success "TrustTunnel uninstallation complete."
-  else
-    echo -e "${YELLOW}❌ Uninstall cancelled.${RESET}"
-  fi
-  echo ""
-  echo -e "${YELLOW}Press Enter to return to main menu...${RESET}"
-  read -p ""
+# Function to draw a colored line for menu separation
+draw_line() {
+    local color="$1"
+    local char="$2"
+    local length=${3:-40} # Default length 40 if not provided
+    printf "${color}"
+    for ((i=0; i<length; i++)); do
+        printf "$char"
+    done
+    printf "${RESET}\n"
 }
+
+# Function to print success messages in green
+print_success() {
+    local message="$1"
+    echo -e "${GREEN}✅ $message${RESET}"
+}
+
+# Function to print error messages in red
+print_error() {
+    local message="$1"
+    echo -e "${RED}❌ $message${RESET}"
+}
+
+# Function to print warning messages in yellow
+print_warning() {
+    local message="$1"
+    echo -e "${YELLOW}⚠️ $message${RESET}"
+}
+
+# Function to show service logs and return to menu
+show_service_logs() {
+    local service_name="$1"
+    clear
+    echo -e "${BLUE}--- Displaying logs for $service_name ---${RESET}"
+    
+    if systemctl is-active --quiet "$service_name"; then
+        echo -e "${GREEN}Service Status: Active${RESET}"
+    else
+        echo -e "${RED}Service Status: Inactive${RESET}"
+    fi
+    echo ""
+    
+    # Display the last 50 lines of logs for the specified service
+    sudo journalctl -u "$service_name" -n 50 --no-pager
+    echo ""
+    echo -e "${YELLOW}Press any key to return to the previous menu...${RESET}"
+    read -n 1 -s -r
+}
+
+# Function to draw green line
+draw_green_line() {
+    echo -e "${GREEN}+--------------------------------------------------------+${RESET}"
+}
+
+# Function to check if a command exists
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+# Function to install system dependencies
+install_dependencies() {
+    echo -e "${CYAN}📦 Installing system dependencies...${RESET}"
+    
+    # Update package list
+    if ! sudo apt update; then
+        print_error "Failed to update package list"
+        return 1
+    fi
+    
+    # Install required packages
+    local packages=(
+        "build-essential"
+        "curl"
+        "pkg-config"
+        "libssl-dev"
+        "git"
+        "figlet"
+        "certbot"
+        "wget"
+        "tar"
+    )
+    
+    for package in "${packages[@]}"; do
+        if ! dpkg -l | grep -q "^ii  $package "; then
+            echo -e "${CYAN}Installing $package...${RESET}"
+            if ! sudo apt install -y "$package"; then
+                print_error "Failed to install $package"
+                return 1
+            fi
+        else
+            echo -e "${GREEN}$package is already installed${RESET}"
+        fi
+    done
+    
+    print_success "All dependencies installed successfully"
+    return 0
+}
+
+# Function to install Rust
+install_rust() {
+    echo -e "${CYAN}🦀 Checking for Rust installation...${RESET}"
+    
+    if command_exists rustc && command_exists cargo; then
+        print_success "Rust is already installed: $(rustc --version)"
+        RUST_IS_READY=true
+        return 0
+    fi
+    
+    echo -e "${CYAN}Installing Rust...${RESET}"
+    
+    # Download and run the rustup installer
+    if curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y; then
+        print_success "Rust installed successfully"
+        
+        # Source the Cargo environment file
+        if [ -f "$CARGO_ENV_FILE" ]; then
+            source "$CARGO_ENV_FILE"
+            echo -e "${CYAN}♻️ Cargo environment sourced${RESET}"
+        else
+            print_warning "Cargo environment file not found, setting PATH manually"
+            export PATH="$HOME/.cargo/bin:$PATH"
+        fi
+        
+        # Verify installation
+        if command_exists rustc && command_exists cargo; then
+            print_success "Installed Rust version: $(rustc --version)"
+            RUST_IS_READY=true
+            
+            echo ""
+            echo -e "${YELLOW}------------------------------------------------------------------${RESET}"
+            echo -e "${YELLOW}⚠️ Important: To make Rust available in new terminal sessions,${RESET}"
+            echo -e "${YELLOW}   restart your terminal or run: source \"$CARGO_ENV_FILE\"${RESET}"
+            echo -e "${YELLOW}------------------------------------------------------------------${RESET}"
+            
+            return 0
+        else
+            print_error "Rust installation verification failed"
+            return 1
+        fi
+    else
+        print_error "Rust installation failed"
+        return 1
+    fi
+}
+
+# Function to uninstall TrustTunnel
+uninstall_trusttunnel_action() {
+    clear
+    echo ""
+    draw_line "$RED" "=" 40
+    echo -e "${RED}        🗑️ Uninstall TrustTunnel${RESET}"
+    draw_line "$RED" "=" 40
+    echo ""
+    
+    echo -e "${RED}⚠️ Are you sure you want to uninstall TrustTunnel and remove all associated files and services?${RESET}"
+    echo -e "${WHITE}This action cannot be undone! (y/N):${RESET} "
+    read -r confirm
+    echo ""
+    
+    if [[ "$confirm" =~ ^[Yy]$ ]]; then
+        echo -e "${CYAN}🧹 Uninstalling TrustTunnel...${RESET}"
+        
+        # Find and remove all trusttunnel services
+        echo -e "${CYAN}🔍 Searching for TrustTunnel services...${RESET}"
+        mapfile -t trusttunnel_services < <(sudo systemctl list-unit-files --full --no-pager | grep '^trusttunnel.*\.service' | awk '{print $1}')
+        
+        if [ ${#trusttunnel_services[@]} -gt 0 ]; then
+            echo -e "${CYAN}🛑 Stopping and removing TrustTunnel services...${RESET}"
+            for service_file in "${trusttunnel_services[@]}"; do
+                local service_name=$(basename "$service_file")
+                echo -e "  ${YELLOW}Processing $service_name...${RESET}"
+                
+                # Stop and disable service
+                sudo systemctl stop "$service_name" 2>/dev/null || true
+                sudo systemctl disable "$service_name" 2>/dev/null || true
+                sudo rm -f "/etc/systemd/system/$service_name" 2>/dev/null || true
+            done
+            
+            sudo systemctl daemon-reload
+            print_success "All TrustTunnel services removed"
+        else
+            print_warning "No TrustTunnel services found"
+        fi
+        
+        # Remove rstun folder
+        if [ -d "rstun" ]; then
+            echo -e "${CYAN}🗑️ Removing 'rstun' folder...${RESET}"
+            rm -rf rstun
+            print_success "'rstun' folder removed"
+        else
+            print_warning "'rstun' folder not found"
+        fi
+        
+        print_success "TrustTunnel uninstallation complete"
+    else
+        print_warning "Uninstall cancelled"
+    fi
+    
+    echo ""
+    echo -e "${YELLOW}Press Enter to return to main menu...${RESET}"
+    read -r
+}
+
+# Function to install TrustTunnel
 install_trusttunnel_action() {
-  clear
-  echo ""
-  draw_line "$CYAN" "=" 40
-  echo -e "${CYAN}        📥 Installing TrustTunnel${RESET}"
-  draw_line "$CYAN" "=" 40
-  echo ""
-
-  # Delete existing rstun folder if it exists
-  if [ -d "rstun" ]; then
-    echo -e "${YELLOW}🧹 Removing existing 'rstun' folder...${RESET}"
-    rm -rf rstun
-    print_success "Existing 'rstun' folder removed."
-  fi
-
-  echo -e "${CYAN}🚀 Detecting system architecture...${RESET}"
-  local arch=$(uname -m)
-  local download_url=""
-  local filename=""
-  local supported_arch=true # Flag to track if architecture is directly supported
-
-  case "$arch" in
-    "x86_64")
-      filename="rstun-linux-x86_64.tar.gz"
-      ;;
-    "aarch64" | "arm64")
-      filename="rstun-linux-aarch64.tar.gz"
-      ;;
-    "armv7l") # Corrected filename for armv7l
-      filename="rstun-linux-armv7.tar.gz"
-      ;;
-    *)
-      supported_arch=false # Mark as unsupported
-      echo -e "${RED}❌ Error: Unsupported architecture detected: $arch${RESET}"
-      echo -e "${YELLOW}Do you want to try installing the x86_64 version as a fallback? (y/N): ${RESET}"
-      read -p "" fallback_confirm
-      echo ""
-      if [[ "$fallback_confirm" =~ ^[Yy]$ ]]; then
-        filename="rstun-linux-x86_64.tar.gz"
-        echo -e "${CYAN}Proceeding with x86_64 version as requested.${RESET}"
-      else
-        echo -e "${YELLOW}Installation cancelled. Please download rstun manually for your system from https://github.com/neevek/rstun/releases${RESET}"
+    clear
+    echo ""
+    draw_line "$CYAN" "=" 40
+    echo -e "${CYAN}        📥 Installing TrustTunnel${RESET}"
+    draw_line "$CYAN" "=" 40
+    echo ""
+    
+    # Remove existing rstun folder if it exists
+    if [ -d "rstun" ]; then
+        echo -e "${YELLOW}🧹 Removing existing 'rstun' folder...${RESET}"
+        rm -rf rstun
+        print_success "Existing 'rstun' folder removed"
+    fi
+    
+    echo -e "${CYAN}🚀 Detecting system architecture...${RESET}"
+    local arch=$(uname -m)
+    local filename=""
+    local supported_arch=true
+    
+    case "$arch" in
+        "x86_64")
+            filename="rstun-linux-x86_64.tar.gz"
+            ;;
+        "aarch64" | "arm64")
+            filename="rstun-linux-aarch64.tar.gz"
+            ;;
+        "armv7l")
+            filename="rstun-linux-armv7.tar.gz"
+            ;;
+        *)
+            supported_arch=false
+            print_error "Unsupported architecture detected: $arch"
+            echo -e "${YELLOW}Do you want to try installing the x86_64 version as a fallback? (y/N):${RESET} "
+            read -r fallback_confirm
+            echo ""
+            
+            if [[ "$fallback_confirm" =~ ^[Yy]$ ]]; then
+                filename="rstun-linux-x86_64.tar.gz"
+                echo -e "${CYAN}Proceeding with x86_64 version as requested${RESET}"
+            else
+                print_warning "Installation cancelled"
+                echo -e "${CYAN}Please download rstun manually from: https://github.com/neevek/rstun/releases${RESET}"
+                echo ""
+                echo -e "${YELLOW}Press Enter to return to main menu...${RESET}"
+                read -r
+                return 1
+            fi
+            ;;
+    esac
+    
+    local download_url="https://github.com/neevek/rstun/releases/download/release%2F0.7.1/${filename}"
+    
+    echo -e "${CYAN}📥 Downloading $filename for $arch...${RESET}"
+    if wget -q --show-progress "$download_url" -O "$filename"; then
+        print_success "Download complete"
+    else
+        print_error "Failed to download $filename"
         echo ""
         echo -e "${YELLOW}Press Enter to return to main menu...${RESET}"
-        read -p ""
-        return 1 # Indicate failure
-      fi
-      ;;
-  esac
-
-  download_url="https://github.com/neevek/rstun/releases/download/release%2F0.7.1/${filename}"
-
-  echo -e "${CYAN}Downloading $filename for $arch...${RESET}"
-  if wget -q --show-progress "$download_url" -O "$filename"; then
-    print_success "Download complete!"
-  else
-    echo -e "${RED}❌ Error: Failed to download $filename. Please check your internet connection or the URL.${RESET}"
+        read -r
+        return 1
+    fi
+    
+    echo -e "${CYAN}📦 Extracting files...${RESET}"
+    if tar -xzf "$filename"; then
+        # Rename extracted folder to 'rstun'
+        mv "${filename%.tar.gz}" rstun 2>/dev/null || true
+        print_success "Extraction complete"
+    else
+        print_error "Failed to extract $filename"
+        rm -f "$filename"
+        echo ""
+        echo -e "${YELLOW}Press Enter to return to main menu...${RESET}"
+        read -r
+        return 1
+    fi
+    
+    echo -e "${CYAN}➕ Setting execute permissions...${RESET}"
+    find rstun -type f -exec chmod +x {} \; 2>/dev/null || true
+    print_success "Permissions set"
+    
+    echo -e "${CYAN}🗑️ Cleaning up downloaded archive...${RESET}"
+    rm -f "$filename"
+    print_success "Cleanup complete"
+    
+    echo ""
+    print_success "TrustTunnel installation complete!"
     echo ""
     echo -e "${YELLOW}Press Enter to return to main menu...${RESET}"
-    read -p ""
-    return 1 # Indicate failure
-  fi
-
-  echo -e "${CYAN}📦 Extracting files...${RESET}"
-  if tar -xzf "$filename"; then
-    mv "${filename%.tar.gz}" rstun # Rename extracted folder to 'rstun'
-    print_success "Extraction complete!"
-  else
-    echo -e "${RED}❌ Error: Failed to extract $filename. Corrupted download?${RESET}"
-    echo ""
-    echo -e "${YELLOW}Press Enter to return to main menu...${RESET}"
-    read -p ""
-    return 1 # Indicate failure
-  fi
-
-  echo -e "${CYAN}➕ Setting execute permissions...${RESET}"
-  find rstun -type f -exec chmod +x {} \;
-  print_success "Permissions set."
-
-  echo -e "${CYAN}🗑️ Cleaning up downloaded archive...${RESET}"
-  rm "$filename"
-  print_success "Cleanup complete."
-
-  echo ""
-  print_success "TrustTunnel installation complete!"
-  echo ""
-  echo -e "${YELLOW}Press Enter to return to main menu...${RESET}"
-  read -p ""
+    read -r
 }
 
-# --- New: Add New Server Action (Beautified) ---
-add_new_server_action() {
-  clear
-  echo ""
-  draw_line "$CYAN" "=" 40
-  echo -e "${CYAN}        ➕ Add New TrustTunnel Server${RESET}"
-  draw_line "$CYAN" "=" 40
-  echo ""
-
-  if [ ! -f "rstun/rstund" ]; then
-    echo -e "${RED}❗ Server build (rstun/rstund) not found.${RESET}"
-    echo -e "${YELLOW}Please run 'Install TrustTunnel' option from the main menu first.${RESET}"
-    echo ""
-    echo -e "${YELLOW}Press Enter to return to main menu...${RESET}"
-    read -p ""
-    return # Use return instead of continue in a function
-  fi
-
-  echo -e "${CYAN}🌐 Domain and Email for SSL Certificate:${RESET}"
-  echo -e "  (e.g., server.example.com)"
-  echo -e "👉 ${WHITE}Please enter your domain pointed to this server:${RESET} "
-  read -p "" domain
-  echo ""
-
-  echo -e "👉 ${WHITE}Please enter your email:${RESET} "
-  read -p "" email
-  echo ""
-
-  local cert_path="/etc/letsencrypt/live/$domain"
-
-  if [ -d "$cert_path" ]; then
-    print_success "SSL certificate for $domain already exists. Skipping Certbot."
-  else
-    echo -e "${CYAN}🔐 Requesting SSL certificate with Certbot...${RESET}"
-    if sudo certbot certonly --standalone -d "$domain" --non-interactive --agree-tos -m "$email"; then
-      print_success "SSL certificate obtained successfully."
+# Function to validate domain format
+validate_domain() {
+    local domain="$1"
+    if [[ "$domain" =~ ^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$ ]]; then
+        return 0
     else
-      echo -e "${RED}❌ Failed to obtain SSL certificate. Cannot start server without SSL.${RESET}"
-      echo ""
-      echo -e "${YELLOW}Press Enter to return to main menu...${RESET}"
-      read -p ""
-      return # Use return instead of exit 1
+        return 1
     fi
-  fi
+}
 
-  # Proceed only if certificate acquisition was successful or it already existed
-  if [ -d "$cert_path" ]; then
+# Function to validate email format
+validate_email() {
+    local email="$1"
+    if [[ "$email" =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Function to validate port number
+validate_port() {
+    local port="$1"
+    if [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Function to add new server
+add_new_server_action() {
+    clear
+    echo ""
+    draw_line "$CYAN" "=" 40
+    echo -e "${CYAN}        ➕ Add New TrustTunnel Server${RESET}"
+    draw_line "$CYAN" "=" 40
+    echo ""
+    
+    # Check if rstund exists
+    if [ ! -f "rstun/rstund" ]; then
+        print_error "Server build (rstun/rstund) not found"
+        echo -e "${YELLOW}Please run 'Install TrustTunnel' option from the main menu first${RESET}"
+        echo ""
+        echo -e "${YELLOW}Press Enter to return to main menu...${RESET}"
+        read -r
+        return
+    fi
+    
+    # Get domain with validation
+    while true; do
+        echo -e "${CYAN}🌐 Domain Configuration:${RESET}"
+        echo -e "  ${WHITE}Enter your domain (e.g., server.example.com):${RESET} "
+        read -r domain
+        
+        if [ -z "$domain" ]; then
+            print_error "Domain cannot be empty"
+            continue
+        fi
+        
+        if validate_domain "$domain"; then
+            break
+        else
+            print_error "Invalid domain format"
+        fi
+    done
+    
+    # Get email with validation
+    while true; do
+        echo ""
+        echo -e "${WHITE}Enter your email for SSL certificate:${RESET} "
+        read -r email
+        
+        if [ -z "$email" ]; then
+            print_error "Email cannot be empty"
+            continue
+        fi
+        
+        if validate_email "$email"; then
+            break
+        else
+            print_error "Invalid email format"
+        fi
+    done
+    
+    echo ""
+    local cert_path="/etc/letsencrypt/live/$domain"
+    
+    # Check for existing SSL certificate
+    if [ -d "$cert_path" ]; then
+        print_success "SSL certificate for $domain already exists"
+    else
+        echo -e "${CYAN}🔐 Requesting SSL certificate with Certbot...${RESET}"
+        if sudo certbot certonly --standalone -d "$domain" --non-interactive --agree-tos -m "$email"; then
+            print_success "SSL certificate obtained successfully"
+        else
+            print_error "Failed to obtain SSL certificate"
+            echo ""
+            echo -e "${YELLOW}Press Enter to return to main menu...${RESET}"
+            read -r
+            return
+        fi
+    fi
+    
+    # Get server configuration with validation
     echo ""
     echo -e "${CYAN}⚙️ Server Configuration:${RESET}"
-    echo -e "  (Default tunneling address port is 6060)"
-    echo -e "👉 ${WHITE}Enter tunneling address port:${RESET} "
-    read -p "" listen_port
-    listen_port=${listen_port:-6060}
-
-    echo -e "  (Default TCP upstream port is 8800)"
-    echo -e "👉 ${WHITE}Enter TCP upstream port:${RESET} "
-    read -p "" tcp_upstream_port
-    tcp_upstream_port=${tcp_upstream_port:-8800}
-
-    echo -e "  (Default UDP upstream port is 8800)"
-    echo -e "👉 ${WHITE}Enter UDP upstream port:${RESET} "
-    read -p "" udp_upstream_port
-    udp_upstream_port=${udp_upstream_port:-8800}
-
-    echo -e "👉 ${WHITE}Enter password:${RESET} "
-    read -p "" password
+    
+    # Listen port
+    while true; do
+        echo -e "${WHITE}Enter tunneling address port (default: 6060):${RESET} "
+        read -r listen_port
+        listen_port=${listen_port:-6060}
+        
+        if validate_port "$listen_port"; then
+            break
+        else
+            print_error "Invalid port number (1-65535)"
+        fi
+    done
+    
+    # TCP upstream port
+    while true; do
+        echo -e "${WHITE}Enter TCP upstream port (default: 8800):${RESET} "
+        read -r tcp_upstream_port
+        tcp_upstream_port=${tcp_upstream_port:-8800}
+        
+        if validate_port "$tcp_upstream_port"; then
+            break
+        else
+            print_error "Invalid port number (1-65535)"
+        fi
+    done
+    
+    # UDP upstream port
+    while true; do
+        echo -e "${WHITE}Enter UDP upstream port (default: 8800):${RESET} "
+        read -r udp_upstream_port
+        udp_upstream_port=${udp_upstream_port:-8800}
+        
+        if validate_port "$udp_upstream_port"; then
+            break
+        else
+            print_error "Invalid port number (1-65535)"
+        fi
+    done
+    
+    # Password
+    while true; do
+        echo -e "${WHITE}Enter password:${RESET} "
+        read -r password
+        
+        if [ -n "$password" ]; then
+            break
+        else
+            print_error "Password cannot be empty"
+        fi
+    done
+    
     echo ""
-
-    if [[ -z "$password" ]]; then
-      echo -e "${RED}❌ Password cannot be empty!${RESET}"
-      echo ""
-      echo -e "${YELLOW}Press Enter to return to main menu...${RESET}"
-      read -p ""
-      return # Use return instead of exit 1
-    fi
-
+    
+    # Stop existing service if running
     local service_file="/etc/systemd/system/trusttunnel.service"
-
     if systemctl is-active --quiet trusttunnel.service || systemctl is-enabled --quiet trusttunnel.service; then
-      echo -e "${YELLOW}🛑 Stopping existing Trusttunnel service...${RESET}"
-      sudo systemctl stop trusttunnel.service > /dev/null 2>&1
-      echo -e "${YELLOW}🗑️ Disabling and removing existing Trusttunnel service...${RESET}"
-      sudo systemctl disable trusttunnel.service > /dev/null 2>&1
-      sudo rm -f /etc/systemd/system/trusttunnel.service > /dev/null 2>&1
-      sudo systemctl daemon-reload > /dev/null 2>&1
-      print_success "Existing TrustTunnel service removed."
+        echo -e "${YELLOW}🛑 Stopping existing TrustTunnel service...${RESET}"
+        sudo systemctl stop trusttunnel.service 2>/dev/null || true
+        sudo systemctl disable trusttunnel.service 2>/dev/null || true
+        sudo rm -f /etc/systemd/system/trusttunnel.service 2>/dev/null || true
+        sudo systemctl daemon-reload
+        print_success "Existing TrustTunnel service removed"
     fi
-
+    
+    # Create systemd service file
     cat <<EOF | sudo tee "$service_file" > /dev/null
 [Unit]
-Description=TrustTunnel Service
+Description=TrustTunnel Server Service
 After=network.target
 
 [Service]
@@ -247,114 +497,201 @@ ExecStart=$(pwd)/rstun/rstund --addr 0.0.0.0:$listen_port --tcp-upstream $tcp_up
 Restart=always
 RestartSec=5
 User=$(whoami)
+WorkingDirectory=$(pwd)
 
 [Install]
 WantedBy=multi-user.target
 EOF
-
-    echo -e "${CYAN}🔧 Reloading systemd daemon...${RESET}"
+    
+    echo -e "${CYAN}🔧 Configuring systemd service...${RESET}"
     sudo systemctl daemon-reload
-
-    echo -e "${CYAN}🚀 Enabling and starting Trusttunnel service...${RESET}"
-    sudo systemctl enable trusttunnel.service > /dev/null 2>&1
-    sudo systemctl start trusttunnel.service > /dev/null 2>&1
-
-    print_success "TrustTunnel service started successfully!"
-  else
-    echo -e "${RED}❌ SSL certificate not available. Server setup aborted.${RESET}"
-  fi
-
-  echo ""
-  echo -e "${YELLOW}Do you want to view the logs for trusttunnel.service now? (y/N): ${RESET}"
-  read -p "" view_logs_choice
-  echo ""
-
-  if [[ "$view_logs_choice" =~ ^[Yy]$ ]]; then
-    show_service_logs trusttunnel.service
-  fi
-
-  echo ""
-  echo -e "${YELLOW}Press Enter to return to previous menu...${RESET}"
-  read -p ""
-
+    
+    echo -e "${CYAN}🚀 Starting TrustTunnel service...${RESET}"
+    if sudo systemctl enable trusttunnel.service && sudo systemctl start trusttunnel.service; then
+        print_success "TrustTunnel service started successfully!"
+        
+        # Show service status
+        echo ""
+        echo -e "${CYAN}📊 Service Status:${RESET}"
+        sudo systemctl status trusttunnel.service --no-pager -l
+    else
+        print_error "Failed to start TrustTunnel service"
+    fi
+    
+    echo ""
+    echo -e "${YELLOW}Do you want to view the logs now? (y/N):${RESET} "
+    read -r view_logs_choice
+    
+    if [[ "$view_logs_choice" =~ ^[Yy]$ ]]; then
+        show_service_logs "trusttunnel.service"
+    fi
+    
+    echo ""
+    echo -e "${YELLOW}Press Enter to return to main menu...${RESET}"
+    read -r
 }
+
+# Function to add new client
 add_new_client_action() {
-  clear
-  echo ""
-  draw_line "$CYAN" "=" 40
-  echo -e "${CYAN}        ➕ Add New TrustTunnel Client${RESET}"
-  draw_line "$CYAN" "=" 40
-  echo ""
-
-  # Prompt for the client name (e.g., asiatech, respina, server2)
-  echo -e "👉 ${WHITE}Enter client name (e.g., asiatech, respina, server2):${RESET} "
-  read -p "" client_name
-  echo ""
-
-  # Construct the service name based on the client name
-  service_name="trusttunnel-$client_name"
-  # Define the path for the systemd service file
-  service_file="/etc/systemd/system/${service_name}.service"
-
-  # Check if a service with the given name already exists
-  if [ -f "$service_file" ]; then
-    echo -e "${RED}❌ Service with this name already exists.${RESET}"
+    clear
     echo ""
-    echo -e "${YELLOW}Press Enter to return to previous menu...${RESET}"
-    read -p ""
-    return # Return to menu
-  fi
-
-  echo -e "${CYAN}🌐 Server Connection Details:${RESET}"
-  echo -e "  (e.x., server.yourdomain.com:6060)"
-  echo -e "👉 ${WHITE}Server address and port:${RESET} "
-  read -p "" server_addr
-  echo ""
-
-  echo -e "${CYAN}📡 Tunnel Mode:${RESET}"
-  echo -e "  (tcp/udp/both)"
-  echo -e "👉 ${WHITE}Tunnel mode ? (tcp/udp/both):${RESET} "
-  read -p "" tunnel_mode
-  echo ""
-
-  echo -e "🔑 ${WHITE}Password:${RESET} "
-  read -p "" password
-  echo ""
-
-  echo -e "${CYAN}🔢 Port Mapping Configuration:${RESET}"
-  echo -e "👉 ${WHITE}How many ports to tunnel?${RESET} "
-  read -p "" port_count
-  echo ""
-  
-  mappings=""
-  for ((i=1; i<=port_count; i++)); do
-    echo -e "👉 ${WHITE}Port #$i:${RESET} "
-    read -p "" port
-    mapping="IN^0.0.0.0:$port^0.0.0.0:$port"
-    [ -z "$mappings" ] && mappings="$mapping" || mappings="$mappings,$mapping"
+    draw_line "$CYAN" "=" 40
+    echo -e "${CYAN}        ➕ Add New TrustTunnel Client${RESET}"
+    draw_line "$CYAN" "=" 40
     echo ""
-  done
-
-  # Determine the mapping arguments based on the tunnel_mode
-  mapping_args=""
-  case "$tunnel_mode" in
-    "tcp")
-      mapping_args="--tcp-mappings \"$mappings\""
-      ;;
-    "udp")
-      mapping_args="--udp-mappings \"$mappings\""
-      ;;
-    "both")
-      mapping_args="--tcp-mappings \"$mappings\" --udp-mappings \"$mappings\""
-      ;;
-    *)
-      echo -e "${YELLOW}⚠️ Invalid tunnel mode specified. Using 'both' as default.${RESET}"
-      mapping_args="--tcp-mappings \"$mappings\" --udp-mappings \"$mappings\""
-      ;;
-  esac
-
-  # Create the systemd service file using a here-document
-  cat <<EOF | sudo tee "$service_file" > /dev/null
+    
+    # Check if rstunc exists
+    if [ ! -f "rstun/rstunc" ]; then
+        print_error "Client build (rstun/rstunc) not found"
+        echo -e "${YELLOW}Please run 'Install TrustTunnel' option from the main menu first${RESET}"
+        echo ""
+        echo -e "${YELLOW}Press Enter to return to main menu...${RESET}"
+        read -r
+        return
+    fi
+    
+    # Get client name with validation
+    while true; do
+        echo -e "${WHITE}Enter client name (e.g., asiatech, respina, server2):${RESET} "
+        read -r client_name
+        
+        if [ -z "$client_name" ]; then
+            print_error "Client name cannot be empty"
+            continue
+        fi
+        
+        # Check if service already exists
+        local service_name="trusttunnel-$client_name"
+        local service_file="/etc/systemd/system/${service_name}.service"
+        
+        if [ -f "$service_file" ]; then
+            print_error "Service with this name already exists"
+            continue
+        fi
+        
+        break
+    done
+    
+    echo ""
+    
+    # Get server address with validation
+    while true; do
+        echo -e "${CYAN}🌐 Server Connection Details:${RESET}"
+        echo -e "${WHITE}Server address and port (e.g., server.yourdomain.com:6060):${RESET} "
+        read -r server_addr
+        
+        if [ -z "$server_addr" ]; then
+            print_error "Server address cannot be empty"
+            continue
+        fi
+        
+        # Basic validation for address:port format
+        if [[ "$server_addr" =~ ^[^:]+:[0-9]+$ ]]; then
+            break
+        else
+            print_error "Invalid format. Use: domain:port or ip:port"
+        fi
+    done
+    
+    echo ""
+    
+    # Get tunnel mode
+    while true; do
+        echo -e "${CYAN}📡 Tunnel Mode:${RESET}"
+        echo -e "${WHITE}Select tunnel mode:${RESET}"
+        echo -e "  ${YELLOW}1)${RESET} TCP only"
+        echo -e "  ${YELLOW}2)${RESET} UDP only"
+        echo -e "  ${YELLOW}3)${RESET} Both TCP and UDP"
+        echo -e "${WHITE}Your choice (1-3):${RESET} "
+        read -r mode_choice
+        
+        case "$mode_choice" in
+            1)
+                tunnel_mode="tcp"
+                break
+                ;;
+            2)
+                tunnel_mode="udp"
+                break
+                ;;
+            3)
+                tunnel_mode="both"
+                break
+                ;;
+            *)
+                print_error "Invalid choice. Please select 1, 2, or 3"
+                ;;
+        esac
+    done
+    
+    echo ""
+    
+    # Get password
+    while true; do
+        echo -e "${WHITE}Enter password:${RESET} "
+        read -r password
+        
+        if [ -n "$password" ]; then
+            break
+        else
+            print_error "Password cannot be empty"
+        fi
+    done
+    
+    echo ""
+    
+    # Get port mappings
+    while true; do
+        echo -e "${CYAN}🔢 Port Mapping Configuration:${RESET}"
+        echo -e "${WHITE}How many ports to tunnel?${RESET} "
+        read -r port_count
+        
+        if [[ "$port_count" =~ ^[0-9]+$ ]] && [ "$port_count" -gt 0 ] && [ "$port_count" -le 100 ]; then
+            break
+        else
+            print_error "Invalid number. Please enter a number between 1 and 100"
+        fi
+    done
+    
+    echo ""
+    
+    # Collect port mappings
+    local mappings=""
+    for ((i=1; i<=port_count; i++)); do
+        while true; do
+            echo -e "${WHITE}Port #$i:${RESET} "
+            read -r port
+            
+            if validate_port "$port"; then
+                local mapping="IN^0.0.0.0:$port^0.0.0.0:$port"
+                if [ -z "$mappings" ]; then
+                    mappings="$mapping"
+                else
+                    mappings="$mappings,$mapping"
+                fi
+                break
+            else
+                print_error "Invalid port number (1-65535)"
+            fi
+        done
+    done
+    
+    # Determine mapping arguments based on tunnel mode
+    local mapping_args=""
+    case "$tunnel_mode" in
+        "tcp")
+            mapping_args="--tcp-mappings \"$mappings\""
+            ;;
+        "udp")
+            mapping_args="--udp-mappings \"$mappings\""
+            ;;
+        "both")
+            mapping_args="--tcp-mappings \"$mappings\" --udp-mappings \"$mappings\""
+            ;;
+    esac
+    
+    # Create systemd service file
+    cat <<EOF | sudo tee "$service_file" > /dev/null
 [Unit]
 Description=TrustTunnel Client - $client_name
 After=network.target
@@ -365,395 +702,370 @@ ExecStart=$(pwd)/rstun/rstunc --server-addr "$server_addr" --password "$password
 Restart=always
 RestartSec=5
 User=$(whoami)
+WorkingDirectory=$(pwd)
 
 [Install]
 WantedBy=multi-user.target
 EOF
-
-  echo -e "${CYAN}🔧 Reloading systemd daemon...${RESET}"
-  sudo systemctl daemon-reload
-
-  echo -e "${CYAN}🚀 Enabling and starting Trusttunnel client service...${RESET}"
-  sudo systemctl enable "$service_name" > /dev/null 2>&1
-  sudo systemctl start "$service_name" > /dev/null 2>&1
-
-  print_success "Client '$client_name' started as $service_name"
-  
-  echo ""
-  echo -e "${YELLOW}Do you want to view the logs for $client_name now? (y/N): ${RESET}"
-  read -p "" view_logs_choice
-  echo ""
-
-  if [[ "$view_logs_choice" =~ ^[Yy]$ ]]; then
-    show_service_logs "$service_name"
-  fi
-
-  echo ""
-  echo -e "${YELLOW}Press Enter to return to previous menu...${RESET}"
-  read -p ""
-}
-
-
-
-# Function to draw a colored line for menu separation
-draw_line() {
-  local color="$1"
-  local char="$2"
-  local length=${3:-40} # Default length 40 if not provided
-  printf "${color}"
-  for ((i=0; i<length; i++)); do
-    printf "$char"
-  done
-  printf "${RESET}\n"
-}
-
-# Function to print success messages in green
-print_success() {
-  local message="$1"
-  echo -e "\033[0;32m✅ $message\033[0m" # Green color for success messages
-}
-
-# Function to show service logs and return to a "menu"
-show_service_logs() {
-  local service_name="$1"
-  clear # Clear the screen before showing logs
-  echo -e "\033[0;34m--- Displaying logs for $service_name ---\033[0m" # Blue color for header
-
-  # Display the last 50 lines of logs for the specified service
-  # --no-pager ensures the output is direct to the terminal without opening 'less'
-  sudo journalctl -u "$service_name" -n 50 --no-pager
-
-  echo ""
-  echo -e "\033[1;33mPress any key to return to the previous menu...\033[0m" # Yellow color for prompt
-  read -n 1 -s -r # Read a single character, silent, raw input
-
-  clear 
-}
-
-
-
-
-draw_green_line() {
-  echo -e "${GREEN}+--------------------------------------------------------+${RESET}"
-}
-
-
-set -e
-
-# Install required tools
-sudo apt update
-sudo apt install -y build-essential curl pkg-config libssl-dev git figlet certbot rustc cargo
-
-# Default path for the Cargo environment file.
-CARGO_ENV_FILE="$HOME/.cargo/env"
-
-echo "Checking for Rust installation..."
-
-# Check if 'rustc' command is available in the system's PATH.
-if command -v rustc >/dev/null 2>&1; then
-  # If 'rustc' is found, Rust is already installed.
-  echo "✅ Rust is already installed: $(rustc --version)"
-  RUST_IS_READY=true
-else
-  # If 'rustc' is not found, start the installation.
-  echo "🦀 Rust is not installed. Installing..."
-  RUST_IS_READY=false
-
-  # Download and run the rustup installer.
-  if curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y; then
-    echo "✅ Rust installed successfully."
-
-    # Source the Cargo environment file for the current script session.
-    if [ -f "$CARGO_ENV_FILE" ]; then
-      source "$CARGO_ENV_FILE"
-      echo "♻️ Cargo environment file sourced for this script session."
+    
+    echo -e "${CYAN}🔧 Configuring systemd service...${RESET}"
+    sudo systemctl daemon-reload
+    
+    echo -e "${CYAN}🚀 Starting TrustTunnel client service...${RESET}"
+    if sudo systemctl enable "$service_name" && sudo systemctl start "$service_name"; then
+        print_success "Client '$client_name' started as $service_name"
+        
+        # Show service status
+        echo ""
+        echo -e "${CYAN}📊 Service Status:${RESET}"
+        sudo systemctl status "$service_name" --no-pager -l
     else
-      # Fallback if the environment file is not found.
-      echo "⚠️ Cargo environment file ($CARGO_ENV_FILE) not found. You might need to set PATH manually."
-      export PATH="$HOME/.cargo/bin:$PATH"
+        print_error "Failed to start client service"
     fi
-
-    # Display the installed version for confirmation.
-    if command -v rustc >/dev/null 2>&1; then
-      echo "✅ Installed Rust version: $(rustc --version)"
-      RUST_IS_READY=true
-    else
-      echo "❌ Rust is installed but 'rustc' is not available in the current PATH."
+    
+    echo ""
+    echo -e "${YELLOW}Do you want to view the logs now? (y/N):${RESET} "
+    read -r view_logs_choice
+    
+    if [[ "$view_logs_choice" =~ ^[Yy]$ ]]; then
+        show_service_logs "$service_name"
     fi
-
+    
     echo ""
-    echo "------------------------------------------------------------------"
-    echo "⚠️ Important: To make Rust available in your terminal,"
-    echo "    you need to restart your terminal or run this command:"
-    echo "    source \"$CARGO_ENV_FILE\""
-    echo "    Run this command once in each new terminal session."
-    echo "------------------------------------------------------------------"
+    echo -e "${YELLOW}Press Enter to return to main menu...${RESET}"
+    read -r
+}
 
-  else
-    # Error message if installation fails.
-    echo "❌ An error occurred during Rust installation. Please check your internet connection or try again."
-  fi
-fi
-
-# --- Continue with the rest of the script if Rust is ready ---
-if [ "$RUST_IS_READY" = true ]; then
-  echo ""
-  echo "🚀 Rust is ready. Continuing with the rest of your script..."
-  # Add your subsequent commands here. For example:
-  # rustc --version
-  # cargo new my_rust_project
-  # cd my_rust_project
-  # cargo run
-  echo "This is a placeholder for the rest of your script."
-  echo "You can replace these lines with your actual Rust-related commands."
-else
-  echo ""
-  echo "🛑 Rust is not ready. Skipping the rest of the script."
-fi
-
-if [ "$RUST_IS_READY" = true ]; then
-while true; do
-  # Clear terminal and show logo
-  clear
-  echo -e "${CYAN}"
-  figlet -f slant "TrustTunnel"
-  echo -e "${CYAN}"
-  echo -e "\033[1;33m=========================================================="
-  echo -e "Developed by ErfanXRay => https://github.com/Erfan-XRay/TrustTunnel"
-  echo -e "Telegram Channel => @Erfan_XRay"
-  echo -e "\033[0m${WHITE}Reverse tunnel over QUIC ( Based on rstun project)${WHITE}${RESET}"
-  draw_green_line
-  echo -e "${GREEN}|${RESET}              ${BOLD_GREEN}TrustTunnel Main Menu${RESET}                  ${GREEN}|${RESET}"
-  draw_green_line
-  # Menu
-  echo "Select an option:"
-  echo -e "${MAGENTA}1) Install TrustTunnel${RESET}"
-  echo -e "${CYAN}2) Tunnel Management${RESET}"
-  echo -e "${RED}3) Uninstall TrustTunnel${RESET}"
-  echo "4) Exit"
-  read -p "👉 Your choice: " choice
-
-  case $choice in
-    1)
-      install_trusttunnel_action
-      ;;
-    2)
-    clear # Clear screen for a fresh menu display
+# Function to show client logs menu
+show_client_logs_menu() {
+    clear
     echo ""
-    draw_line "$GREEN" "=" 40 # Top border
-    echo -e "${CYAN}        🌐 Choose Tunnel Mode${RESET}"
-    draw_line "$GREEN" "=" 40 # Separator
+    draw_line "$CYAN" "=" 40
+    echo -e "${CYAN}        📊 TrustTunnel Client Logs${RESET}"
+    draw_line "$CYAN" "=" 40
     echo ""
-    echo -e "  ${YELLOW}1)${RESET} ${MAGENTA}Server (Iran)${RESET}" # Magenta for Server
-    echo -e "  ${YELLOW}2)${RESET} ${BLUE}Client (Kharej)${RESET}" # Blue for Client
-    echo -e "  ${YELLOW}3)${RESET} ${WHITE}Return to main menu${RESET}" # White for generic option
+    
+    echo -e "${CYAN}🔍 Searching for client services...${RESET}"
+    mapfile -t services < <(systemctl list-units --type=service --all | grep 'trusttunnel-' | awk '{print $1}' | sed 's/.service$//')
+    
+    if [ ${#services[@]} -eq 0 ]; then
+        print_error "No client services found"
+        echo ""
+        echo -e "${YELLOW}Press Enter to return to previous menu...${RESET}"
+        read -r
+        return
+    fi
+    
+    echo -e "${CYAN}📋 Available client services:${RESET}"
+    for i in "${!services[@]}"; do
+        echo -e "  ${YELLOW}$((i+1)))${RESET} ${services[i]}"
+    done
     echo ""
-    draw_line "$GREEN" "-" 40 # Bottom border
-    echo -e "👉 ${CYAN}Your choice:${RESET} " # Moved prompt to echo -e
-    read -p "" tunnel_choice # Removed prompt from read -p
-    echo "" # Add a blank line for better spacing after input
-
-      case $tunnel_choice in
-        1)
-          clear
-
-          # زیرمنوی مدیریت سرور
-          while true; do
-              clear # Clear screen for a fresh menu display
-              echo ""
-              draw_line "$GREEN" "=" 40 # Top border
-              echo -e "${CYAN}        🔧 TrustTunnel Server Management${RESET}"
-              draw_line "$GREEN" "=" 40 # Separator
-              echo ""
-              echo -e "  ${YELLOW}1)${RESET} ${WHITE}Add new server${RESET}"
-              echo -e "  ${YELLOW}2)${RESET} ${WHITE}Show service logs${RESET}"
-              echo -e "  ${YELLOW}3)${RESET} ${WHITE}Delete service${RESET}"
-              echo -e "  ${YELLOW}4)${RESET} ${WHITE}Back to main menu${RESET}"
-              echo ""
-              draw_line "$GREEN" "-" 40 # Bottom border
-              echo -e "👉 ${CYAN}Your choice:${RESET} " 
-              read -p "" srv_choice 
-              echo "" 
-            case $srv_choice in
-              1)
-
-              add_new_server_action
-
-          ;;
-          2)
-           clear
-          # Show service logs
-                service_file="/etc/systemd/system/trusttunnel.service"
-                if [ -f "$service_file" ]; then
-                  show_service_logs "trusttunnel.service"
-                else
-                  echo "❌ Service 'trusttunnel.service' not found. Cannot show logs."
-                  
-                fi
-                break
-          ;;
-          3)
-           clear
-          service_file="/etc/systemd/system/trusttunnel.service"
-                if [ -f "$service_file" ]; then
-                  echo "🛑 Stopping and deleting trusttunnel.service..."
-                  sudo systemctl stop trusttunnel.service
-                  sudo systemctl disable trusttunnel.service
-                  sudo rm -f "$service_file"
-                  sudo systemctl daemon-reload
-                  echo "✅ Service deleted."
-                else
-                  echo "❌ Service 'trusttunnel.service' not found. Nothing to delete."
-                fi
-                break
-          ;;
-
-          4)
+    
+    while true; do
+        echo -e "${WHITE}Select a service to view logs (1-${#services[@]}):${RESET} "
+        read -r selection
+        
+        if [[ "$selection" =~ ^[0-9]+$ ]] && [ "$selection" -ge 1 ] && [ "$selection" -le ${#services[@]} ]; then
+            local selected_service="${services[$((selection-1))]}"
+            show_service_logs "$selected_service"
             break
-          ;;
+        else
+            print_error "Invalid selection. Please enter a number between 1 and ${#services[@]}"
+        fi
+    done
+}
 
-          *)
-            echo "❌ Invalid option."
-          ;;
-          esac
-          done
-          ;;
-        2)
-          clear
-           
-        while true; do
-          clear # Clear screen for a fresh menu display
-          echo ""
-          draw_line "$GREEN" "=" 40 # Top border
-          echo -e "${CYAN}        📡 TrustTunnel Client Management${RESET}"
-          draw_line "$GREEN" "=" 40 # Separator
-          echo ""
-          echo -e "  ${YELLOW}1)${RESET} ${WHITE}Add new client${RESET}"
-          echo -e "  ${YELLOW}2)${RESET} ${WHITE}Show Client Log${RESET}"
-          echo -e "  ${YELLOW}3)${RESET} ${WHITE}Delete a client${RESET}"
-          echo -e "  ${YELLOW}4)${RESET} ${WHITE}Back to main menu${RESET}"
-          echo ""
-          draw_line "$GREEN" "-" 40 # Bottom border
-          echo -e "👉 ${CYAN}Your choice:${RESET} " 
-          read -p "" client_choice 
-          echo "" 
+# Function to delete client menu
+delete_client_menu() {
+    clear
+    echo ""
+    draw_line "$CYAN" "=" 40
+    echo -e "${CYAN}        🗑️ Delete TrustTunnel Client${RESET}"
+    draw_line "$CYAN" "=" 40
+    echo ""
+    
+    echo -e "${CYAN}🔍 Searching for client services...${RESET}"
+    mapfile -t services < <(systemctl list-units --type=service --all | grep 'trusttunnel-' | awk '{print $1}' | sed 's/.service$//')
+    
+    if [ ${#services[@]} -eq 0 ]; then
+        print_error "No client services found"
+        echo ""
+        echo -e "${YELLOW}Press Enter to return to previous menu...${RESET}"
+        read -r
+        return
+    fi
+    
+    echo -e "${CYAN}📋 Available client services:${RESET}"
+    for i in "${!services[@]}"; do
+        echo -e "  ${YELLOW}$((i+1)))${RESET} ${services[i]}"
+    done
+    echo ""
+    
+    while true; do
+        echo -e "${WHITE}Select a service to delete (1-${#services[@]}):${RESET} "
+        read -r selection
+        
+        if [[ "$selection" =~ ^[0-9]+$ ]] && [ "$selection" -ge 1 ] && [ "$selection" -le ${#services[@]} ]; then
+            local selected_service="${services[$((selection-1))]}"
+            local service_file="/etc/systemd/system/${selected_service}.service"
+            
+            echo ""
+            echo -e "${RED}⚠️ Are you sure you want to delete '$selected_service'? (y/N):${RESET} "
+            read -r confirm
+            
+            if [[ "$confirm" =~ ^[Yy]$ ]]; then
+                echo -e "${YELLOW}🛑 Stopping $selected_service...${RESET}"
+                sudo systemctl stop "$selected_service" 2>/dev/null || true
+                
+                echo -e "${YELLOW}🗑️ Disabling $selected_service...${RESET}"
+                sudo systemctl disable "$selected_service" 2>/dev/null || true
+                
+                echo -e "${YELLOW}🗑️ Removing service file...${RESET}"
+                sudo rm -f "$service_file" 2>/dev/null || true
+                
+                sudo systemctl daemon-reload
+                print_success "Client '$selected_service' deleted successfully"
+            else
+                print_warning "Deletion cancelled"
+            fi
+            break
+        else
+            print_error "Invalid selection. Please enter a number between 1 and ${#services[@]}"
+        fi
+    done
+    
+    echo ""
+    echo -e "${YELLOW}Press Enter to return to previous menu...${RESET}"
+    read -r
+}
 
-          case $client_choice in
-            1)
-            clear
-        add_new_client_action
-        ;;
-      2)
+# Function to show server management menu
+server_management_menu() {
+    while true; do
         clear
         echo ""
-        draw_line "$CYAN" "=" 40
-        echo -e "${CYAN}        📊 TrustTunnel Client Logs${RESET}"
-        draw_line "$CYAN" "=" 40
+        draw_line "$GREEN" "=" 40
+        echo -e "${CYAN}        🔧 TrustTunnel Server Management${RESET}"
+        draw_line "$GREEN" "=" 40
         echo ""
-
-        echo -e "${CYAN}🔍 Searching for clients ...${RESET}"
-
-        # List all systemd services that start with trusttunnel-
-        mapfile -t services < <(systemctl list-units --type=service --all | grep 'trusttunnel-' | awk '{print $1}' | sed 's/.service$//')
+        echo -e "  ${YELLOW}1)${RESET} ${WHITE}Add new server${RESET}"
+        echo -e "  ${YELLOW}2)${RESET} ${WHITE}Show service logs${RESET}"
+        echo -e "  ${YELLOW}3)${RESET} ${WHITE}Delete service${RESET}"
+        echo -e "  ${YELLOW}4)${RESET} ${WHITE}Back to main menu${RESET}"
+        echo ""
+        draw_line "$GREEN" "-" 40
+        echo -e "${WHITE}Your choice:${RESET} "
+        read -r srv_choice
+        echo ""
         
-        if [ ${#services[@]} -eq 0 ]; then
-          echo -e "${RED}❌ No clients found.${RESET}"
-          echo ""
-          echo -e "${YELLOW}Press Enter to return to previous menu...${RESET}"
-          read -p ""
-          return # Return to menu
+        case $srv_choice in
+            1)
+                add_new_server_action
+                ;;
+            2)
+                local service_file="/etc/systemd/system/trusttunnel.service"
+                if [ -f "$service_file" ]; then
+                    show_service_logs "trusttunnel.service"
+                else
+                    print_error "Service 'trusttunnel.service' not found"
+                    echo ""
+                    echo -e "${YELLOW}Press Enter to continue...${RESET}"
+                    read -r
+                fi
+                ;;
+            3)
+                local service_file="/etc/systemd/system/trusttunnel.service"
+                if [ -f "$service_file" ]; then
+                    echo -e "${RED}⚠️ Are you sure you want to delete the server service? (y/N):${RESET} "
+                    read -r confirm
+                    
+                    if [[ "$confirm" =~ ^[Yy]$ ]]; then
+                        echo -e "${YELLOW}🛑 Stopping trusttunnel.service...${RESET}"
+                        sudo systemctl stop trusttunnel.service 2>/dev/null || true
+                        sudo systemctl disable trusttunnel.service 2>/dev/null || true
+                        sudo rm -f "$service_file" 2>/dev/null || true
+                        sudo systemctl daemon-reload
+                        print_success "Server service deleted"
+                    else
+                        print_warning "Deletion cancelled"
+                    fi
+                else
+                    print_error "Service 'trusttunnel.service' not found"
+                fi
+                echo ""
+                echo -e "${YELLOW}Press Enter to continue...${RESET}"
+                read -r
+                ;;
+            4)
+                break
+                ;;
+            *)
+                print_error "Invalid option"
+                echo ""
+                echo -e "${YELLOW}Press Enter to continue...${RESET}"
+                read -r
+                ;;
+        esac
+    done
+}
+
+# Function to show client management menu
+client_management_menu() {
+    while true; do
+        clear
+        echo ""
+        draw_line "$GREEN" "=" 40
+        echo -e "${CYAN}        📡 TrustTunnel Client Management${RESET}"
+        draw_line "$GREEN" "=" 40
+        echo ""
+        echo -e "  ${YELLOW}1)${RESET} ${WHITE}Add new client${RESET}"
+        echo -e "  ${YELLOW}2)${RESET} ${WHITE}Show client logs${RESET}"
+        echo -e "  ${YELLOW}3)${RESET} ${WHITE}Delete a client${RESET}"
+        echo -e "  ${YELLOW}4)${RESET} ${WHITE}Back to main menu${RESET}"
+        echo ""
+        draw_line "$GREEN" "-" 40
+        echo -e "${WHITE}Your choice:${RESET} "
+        read -r client_choice
+        echo ""
+        
+        case $client_choice in
+            1)
+                add_new_client_action
+                ;;
+            2)
+                show_client_logs_menu
+                ;;
+            3)
+                delete_client_menu
+                ;;
+            4)
+                break
+                ;;
+            *)
+                print_error "Invalid option"
+                echo ""
+                echo -e "${YELLOW}Press Enter to continue...${RESET}"
+                read -r
+                ;;
+        esac
+    done
+}
+
+# Function to show tunnel management menu
+tunnel_management_menu() {
+    while true; do
+        clear
+        echo ""
+        draw_line "$GREEN" "=" 40
+        echo -e "${CYAN}        🌐 Choose Tunnel Mode${RESET}"
+        draw_line "$GREEN" "=" 40
+        echo ""
+        echo -e "  ${YELLOW}1)${RESET} ${MAGENTA}Server (Iran)${RESET}"
+        echo -e "  ${YELLOW}2)${RESET} ${BLUE}Client (Kharej)${RESET}"
+        echo -e "  ${YELLOW}3)${RESET} ${WHITE}Return to main menu${RESET}"
+        echo ""
+        draw_line "$GREEN" "-" 40
+        echo -e "${WHITE}Your choice:${RESET} "
+        read -r tunnel_choice
+        echo ""
+        
+        case $tunnel_choice in
+            1)
+                server_management_menu
+                ;;
+            2)
+                client_management_menu
+                ;;
+            3)
+                break
+                ;;
+            *)
+                print_error "Invalid option"
+                echo ""
+                echo -e "${YELLOW}Press Enter to continue...${RESET}"
+                read -r
+                ;;
+        esac
+    done
+}
+
+# Main function
+main() {
+    # Set error handling
+    set -e
+    
+    # Install dependencies
+    if ! install_dependencies; then
+        print_error "Failed to install dependencies"
+        exit 1
+    fi
+    
+    # Install Rust
+    if ! install_rust; then
+        print_error "Failed to install Rust"
+        exit 1
+    fi
+    
+    # Check if Rust is ready
+    if [ "$RUST_IS_READY" != true ]; then
+        print_error "Rust is not ready. Cannot continue"
+        exit 1
+    fi
+    
+    # Main menu loop
+    while true; do
+        clear
+        echo -e "${CYAN}"
+        if command_exists figlet; then
+            figlet -f slant "TrustTunnel" 2>/dev/null || echo "TrustTunnel"
+        else
+            echo "TrustTunnel"
         fi
+        echo -e "${RESET}"
+        
+        echo -e "${YELLOW}==========================================================${RESET}"
+        echo -e "${YELLOW}Developed by ErfanXRay => https://github.com/Erfan-XRay/TrustTunnel${RESET}"
+        echo -e "${YELLOW}Telegram Channel => @Erfan_XRay${RESET}"
+        echo -e "${WHITE}Reverse tunnel over QUIC (Based on rstun project)${RESET}"
+        
+        draw_green_line
+        echo -e "${GREEN}|${RESET}              ${BOLD_GREEN}TrustTunnel Main Menu${RESET}                  ${GREEN}|${RESET}"
+        draw_green_line
+        
+        echo ""
+        echo -e "${WHITE}Select an option:${RESET}"
+        echo -e "${MAGENTA}1) Install TrustTunnel${RESET}"
+        echo -e "${CYAN}2) Tunnel Management${RESET}"
+        echo -e "${RED}3) Uninstall TrustTunnel${RESET}"
+        echo -e "${WHITE}4) Exit${RESET}"
+        echo ""
+        echo -e "${WHITE}Your choice:${RESET} "
+        read -r choice
+        
+        case $choice in
+            1)
+                install_trusttunnel_action
+                ;;
+            2)
+                tunnel_management_menu
+                ;;
+            3)
+                uninstall_trusttunnel_action
+                ;;
+            4)
+                echo -e "${GREEN}👋 Goodbye!${RESET}"
+                exit 0
+                ;;
+            *)
+                print_error "Invalid choice"
+                echo ""
+                echo -e "${YELLOW}Press Enter to continue...${RESET}"
+                read -r
+                ;;
+        esac
+    done
+}
 
-        echo -e "${CYAN}📋 Please select a service to see log:${RESET}"
-        select selected_service in "${services[@]}"; do
-          if [ -n "$selected_service" ]; then
-            show_service_logs "$selected_service"
-            break # Exit the select loop
-          else
-            echo -e "${RED}⚠️ Invalid selection. Please enter a valid number.${RESET}"
-          fi
-        done
-        echo "" # Add a blank line after selection
-        echo -e "${YELLOW}Press Enter to return to previous menu...${RESET}"
-        read -p ""
-        ;;
-      3)
-      
-
-          clear
-          echo ""
-          draw_line "$CYAN" "=" 40
-          echo -e "${CYAN}        🗑️ Delete TrustTunnel Client${RESET}"
-          draw_line "$CYAN" "=" 40
-          echo ""
-
-          echo -e "${CYAN}🔍 Searching for clients ...${RESET}"
-
-          # List all systemd services that start with trusttunnel-
-          mapfile -t services < <(systemctl list-units --type=service --all | grep 'trusttunnel-' | awk '{print $1}' | sed 's/.service$//')
-          
-          if [ ${#services[@]} -eq 0 ]; then
-            echo -e "${RED}❌ No clients found.${RESET}"
-            echo ""
-            echo -e "${YELLOW}Press Enter to return to previous menu...${RESET}"
-            read -p ""
-            return # Return to menu
-          fi
-
-          echo -e "${CYAN}📋 Please select a service to delete:${RESET}"
-          select selected_service in "${services[@]}"; do
-            if [ -n "$selected_service" ]; then
-              service_file="/etc/systemd/system/${selected_service}.service"
-              echo -e "${YELLOW}🛑 Stopping $selected_service...${RESET}"
-              sudo systemctl stop "$selected_service" > /dev/null 2>&1
-              echo -e "${YELLOW}🗑️ Disabling $selected_service...${RESET}"
-              sudo systemctl disable "$selected_service" > /dev/null 2>&1
-              echo -e "${YELLOW}🗑️ Removing service file...${RESET}"
-              sudo rm -f "$service_file" > /dev/null 2>&1
-              sudo systemctl daemon-reload > /dev/null 2>&1
-              print_success "Client '$selected_service' deleted."
-              break # Exit the select loop
-            else
-              echo -e "${RED}⚠️ Invalid selection. Please enter a valid number.${RESET}"
-            fi
-          done
-          echo "" # Add a blank line after selection
-          echo -e "${YELLOW}Press Enter to return to previous menu...${RESET}"
-          read -p ""
-        ;;
-
-      4)
-          break
-        ;;
-      *)
-        echo "❌ Invalid option."
-        ;;
-          esac
-
-          echo ""
-          read -p "Press Enter to continue..."
-        done
-
-                esac
-      ;;
-    3)
-          uninstall_trusttunnel_action ;;
-   
-
-    4)
-        exit 0 
-        break
-    ;;
-    *)
-      echo "❌ Invalid choice. Exiting."
-      ;;
-  esac
-  echo ""
-  read -p "Press Enter to return to main menu..."
-done
-else
-echo ""
-  echo "🛑 Rust is not ready. Skipping the rest of the script."
-fi
-
-
+# Run main function
+main "$@"
