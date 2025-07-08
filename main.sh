@@ -1134,10 +1134,10 @@ show_server_status() {
         if [ -n "$exec_start" ]; then
             echo -e "${WHITE}Command: $exec_start${RESET}"
             
-            # Extract ports from command
-            local listen_port=$(echo "$exec_start" | grep -o '\--addr [^:]*:$$[0-9]*$$' | cut -d':' -f2)
-            local tcp_port=$(echo "$exec_start" | grep -o '\--tcp-upstream $$[0-9]*$$' | awk '{print $2}')
-            local udp_port=$(echo "$exec_start" | grep -o '\--udp-upstream $$[0-9]*$$' | awk '{print $2}')
+            # Extract ports from command - اصلاح regex ها
+            local listen_port=$(echo "$exec_start" | grep -o '\--addr [^:]*:[0-9]*' | cut -d':' -f2)
+            local tcp_port=$(echo "$exec_start" | grep -o '\--tcp-upstream [0-9]*' | awk '{print $2}')
+            local udp_port=$(echo "$exec_start" | grep -o '\--udp-upstream [0-9]*' | awk '{print $2}')
             
             echo ""
             echo -e "${CYAN}🔌 Port Configuration:${RESET}"
@@ -1201,20 +1201,23 @@ show_client_status() {
             if [ -f "$service_file" ]; then
                 local exec_start=$(grep "ExecStart=" "$service_file" | cut -d'=' -f2-)
                 
-                # Extract server address
-                local server_addr=$(echo "$exec_start" | grep -o '\--server-addr [^ ]*' | cut -d' ' -f2)
+                # Extract server address - حذف کوتیشن‌های اضافی
+                local server_addr=$(echo "$exec_start" | grep -o '\--server-addr [^ ]*' | cut -d' ' -f2 | sed 's/"//g')
                 [ -n "$server_addr" ] && echo -e "${WHITE}🌐 Server: $server_addr${RESET}"
                 
-                # Extract mappings
+                # Extract mappings - اصلاح نمایش پورت‌ها
                 local tcp_mappings=$(echo "$exec_start" | grep -o '\--tcp-mappings "[^"]*"' | sed 's/--tcp-mappings "//;s/"//')
                 local udp_mappings=$(echo "$exec_start" | grep -o '\--udp-mappings "[^"]*"' | sed 's/--udp-mappings "//;s/"//')
-                
+
                 if [ -n "$tcp_mappings" ]; then
-                    echo -e "${WHITE}🔌 TCP Ports: ${tcp_mappings//,/ }${RESET}"
+                    # استخراج پورت‌ها از فرمت IN^0.0.0.0:PORT^0.0.0.0:PORT
+                    local tcp_ports=$(echo "$tcp_mappings" | sed 's/IN\^0\.0\.0\.0://g' | sed 's/\^0\.0\.0\.0:[0-9]*//g' | tr ',' ' ')
+                    echo -e "${WHITE}🔌 TCP Ports: $tcp_ports${RESET}"
                 fi
-                
+
                 if [ -n "$udp_mappings" ]; then
-                    echo -e "${WHITE}🔌 UDP Ports: ${udp_mappings//,/ }${RESET}"
+                    local udp_ports=$(echo "$udp_mappings" | sed 's/IN\^0\.0\.0\.0://g' | sed 's/\^0\.0\.0\.0:[0-9]*//g' | tr ',' ' ')
+                    echo -e "${WHITE}🔌 UDP Ports: $udp_ports${RESET}"
                 fi
             fi
             echo ""
