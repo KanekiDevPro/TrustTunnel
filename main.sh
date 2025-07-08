@@ -1736,7 +1736,7 @@ show_system_info() {
         echo -e "${YELLOW}Rust: Not cached${RESET}"
     fi
 
-pause
+read -p "Press any key to continue..."
 }
 
 # ============================================================================
