@@ -1723,4 +1723,76 @@ show_system_info() {
     
     # Cache status
     echo ""
-    echo -e "${BOLD_YELLOW}📦 Cache
+    echo -e "${BOLD_YELLOW}📦 Cache Status${RESET}"
+    if check_cached_deps; then
+        echo -e "${GREEN}Dependencies: Cached${RESET}"
+    else
+        echo -e "${YELLOW}Dependencies: Not cached${RESET}"
+    fi
+
+    if check_cached_rust; then
+        echo -e "${GREEN}Rust: Cached${RESET}"
+    else
+        echo -e "${YELLOW}Rust: Not cached${RESET}"
+    fi
+
+pause
+}
+
+# ============================================================================
+# MAIN FUNCTION
+# ============================================================================
+
+main() {
+    # Initialize
+    set -e
+    
+    # Create log file
+    sudo touch "$LOG_FILE" 2>/dev/null || true
+    sudo chmod 666 "$LOG_FILE" 2>/dev/null || true
+    
+    log_message "INFO" "TrustTunnel Manager started"
+    
+    # Quick initialization check
+    if quick_init; then
+        print_success "Quick start: Using cached dependencies"
+    else
+        print_info "Installing dependencies (first run)"
+        # Install dependencies
+        if ! install_dependencies; then
+            print_error "Failed to install dependencies"
+            exit 1
+        fi
+        
+        # Install Rust
+        if ! install_rust; then
+            print_error "Failed to install Rust"
+            exit 1
+        fi
+    fi
+    
+    # Main menu loop
+    while true; do
+        show_main_menu
+        read -r choice
+        
+        case $choice in
+            1) show_installation_menu ;;
+            2) show_service_management_menu ;;
+            3) show_monitoring_menu ;;
+            4) show_tools_menu ;;
+            0)
+                echo -e "${GREEN}👋 Goodbye!${RESET}"
+                log_message "INFO" "TrustTunnel Manager exited"
+                exit 0
+                ;;
+            *)
+                print_error "Invalid choice"
+                pause
+                ;;
+        esac
+    done
+}
+
+# Run main function
+main "$@"
