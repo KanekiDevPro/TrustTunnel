@@ -1593,8 +1593,9 @@ main() {
         echo -e "${WHITE}Select an option:${RESET}"
         echo -e "${MAGENTA}1) Install TrustTunnel${RESET}"
         echo -e "${CYAN}2) Tunnel Management${RESET}"
-        echo -e "${RED}3) Uninstall TrustTunnel${RESET}"
-        echo -e "${WHITE}4) Exit${RESET}"
+        echo -e "${BLUE}3) Service Status${RESET}"
+        echo -e "${RED}4) Uninstall TrustTunnel${RESET}"
+        echo -e "${WHITE}5) Exit${RESET}"
         echo ""
         echo -e "${WHITE}Your choice:${RESET} "
         read -r choice
@@ -1607,9 +1608,12 @@ main() {
                 tunnel_management_menu
                 ;;
             3)
-                uninstall_trusttunnel_action
+                show_all_services_status
                 ;;
             4)
+                uninstall_trusttunnel_action
+                ;;
+            5)
                 echo -e "${GREEN}👋 Goodbye!${RESET}"
                 exit 0
                 ;;
