@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# TrustTunnel Management Script - Optimized Version
+# TrustTunnel Management Script - Optimized Version with Caching
 # Developed by ErfanXRay => https://github.com/Erfan-XRay/TrustTunnel
 # Telegram Channel => @Erfan_XRay
 
@@ -22,6 +22,89 @@ RUST_IS_READY=false
 CARGO_ENV_FILE="$HOME/.cargo/env"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_FILE="/var/log/trusttunnel-manager.log"
+
+# Cache files
+CACHE_DIR="$HOME/.trusttunnel-cache"
+DEPS_CACHE_FILE="$CACHE_DIR/deps_installed"
+RUST_CACHE_FILE="$CACHE_DIR/rust_installed"
+CACHE_EXPIRY=86400  # 24 hours in seconds
+
+# ============================================================================
+# CACHE FUNCTIONS
+# ============================================================================
+
+# Function to create cache directory
+create_cache_dir() {
+    [ ! -d "$CACHE_DIR" ] && mkdir -p "$CACHE_DIR"
+}
+
+# Function to check if cache is valid
+is_cache_valid() {
+    local cache_file="$1"
+    local max_age="$2"
+    
+    if [ ! -f "$cache_file" ]; then
+        return 1
+    fi
+    
+    local file_age=$(($(date +%s) - $(stat -c %Y "$cache_file" 2>/dev/null || echo 0)))
+    [ "$file_age" -lt "$max_age" ]
+}
+
+# Function to create cache file
+create_cache() {
+    local cache_file="$1"
+    local content="$2"
+    create_cache_dir
+    echo "$content" > "$cache_file"
+}
+
+# Function to check cached dependencies
+check_cached_deps() {
+    if is_cache_valid "$DEPS_CACHE_FILE" "$CACHE_EXPIRY"; then
+        local cached_status=$(cat "$DEPS_CACHE_FILE" 2>/dev/null)
+        if [ "$cached_status" = "installed" ]; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
+# Function to check cached Rust installation
+check_cached_rust() {
+    if is_cache_valid "$RUST_CACHE_FILE" "$CACHE_EXPIRY"; then
+        local cached_status=$(cat "$RUST_CACHE_FILE" 2>/dev/null)
+        if [ "$cached_status" = "installed" ]; then
+            # Also verify Rust is actually available
+            if command_exists rustc && command_exists cargo; then
+                RUST_IS_READY=true
+                return 0
+            fi
+        fi
+    fi
+    return 1
+}
+
+# Function for quick initialization
+quick_init() {
+    # Quick check for essential commands without full installation
+    if check_cached_deps && check_cached_rust; then
+        # Source Rust environment if needed
+        if [ -f "$CARGO_ENV_FILE" ]; then
+            source "$CARGO_ENV_FILE" 2>/dev/null || true
+        else
+            export PATH="$HOME/.cargo/bin:$PATH"
+        fi
+        
+        # Verify Rust is working
+        if command_exists rustc && command_exists cargo; then
+            RUST_IS_READY=true
+        fi
+        
+        return 0
+    fi
+    return 1
+}
 
 # ============================================================================
 # UTILITY FUNCTIONS
@@ -140,6 +223,12 @@ validate_port() {
 
 # Function to install system dependencies
 install_dependencies() {
+    # Check cache first
+    if check_cached_deps; then
+        print_success "Dependencies already installed (cached)"
+        return 0
+    fi
+    
     print_info "Installing system dependencies"
     
     if ! sudo apt update &>/dev/null; then
@@ -152,27 +241,49 @@ install_dependencies() {
         "git" "figlet" "certbot" "wget" "tar" "net-tools"
     )
     
+    local packages_to_install=()
+    
+    # Check which packages are missing
     for package in "${packages[@]}"; do
         if ! dpkg -l | grep -q "^ii  $package "; then
+            packages_to_install+=("$package")
+        fi
+    done
+    
+    # Install missing packages
+    if [ ${#packages_to_install[@]} -gt 0 ]; then
+        print_info "Installing missing packages: ${packages_to_install[*]}"
+        for package in "${packages_to_install[@]}"; do
             print_info "Installing $package"
             sudo apt install -y "$package" &>/dev/null || {
                 print_error "Failed to install $package"
                 return 1
             }
-        fi
-    done
+        done
+    else
+        print_success "All packages already installed"
+    fi
     
-    print_success "All dependencies installed successfully"
+    # Cache the result
+    create_cache "$DEPS_CACHE_FILE" "installed"
+    print_success "Dependencies installation completed and cached"
     return 0
 }
 
 # Function to install Rust
 install_rust() {
+    # Check cache first
+    if check_cached_rust; then
+        print_success "Rust already installed (cached)"
+        return 0
+    fi
+    
     print_info "Checking Rust installation"
     
     if command_exists rustc && command_exists cargo; then
         print_success "Rust is already installed: $(rustc --version)"
         RUST_IS_READY=true
+        create_cache "$RUST_CACHE_FILE" "installed"
         return 0
     fi
     
@@ -190,12 +301,34 @@ install_rust() {
         if command_exists rustc && command_exists cargo; then
             print_success "Rust version: $(rustc --version)"
             RUST_IS_READY=true
+            create_cache "$RUST_CACHE_FILE" "installed"
             return 0
         fi
     fi
     
     print_error "Rust installation failed"
     return 1
+}
+
+# Function to force refresh dependencies
+force_refresh_deps() {
+    clear
+    draw_line "$YELLOW" "=" 50
+    echo -e "${YELLOW}        🔄 Force Refresh Dependencies${RESET}"
+    draw_line "$YELLOW" "=" 50
+    echo ""
+    
+    print_info "Clearing dependency cache"
+    rm -f "$DEPS_CACHE_FILE" "$RUST_CACHE_FILE"
+    
+    print_info "Reinstalling dependencies"
+    if install_dependencies && install_rust; then
+        print_success "Dependencies refreshed successfully"
+    else
+        print_error "Failed to refresh dependencies"
+    fi
+    
+    pause
 }
 
 # ============================================================================
@@ -530,6 +663,12 @@ uninstall_trusttunnel() {
     if [ -d "rstun" ]; then
         rm -rf rstun
         print_success "Installation files removed"
+    fi
+    
+    # Clear cache
+    if confirm_action "Clear dependency cache?"; then
+        rm -rf "$CACHE_DIR"
+        print_success "Cache cleared"
     fi
     
     print_success "TrustTunnel uninstalled successfully"
@@ -1171,6 +1310,13 @@ show_main_menu() {
     echo -e "${WHITE}Reverse tunnel over QUIC (Based on rstun project)${RESET}"
     draw_line "$GREEN" "=" 60
     
+    # Show cache status
+    if check_cached_deps && check_cached_rust; then
+        echo -e "${GREEN}⚡ Quick Mode: Dependencies cached${RESET}"
+    else
+        echo -e "${YELLOW}🔄 First run: Will install dependencies${RESET}"
+    fi
+    
     echo ""
     echo -e "${BOLD_GREEN}📋 MAIN MENU${RESET}"
     echo ""
@@ -1197,6 +1343,7 @@ show_installation_menu() {
         echo -e "${WHITE}Select option:${RESET}"
         echo -e "  ${YELLOW}1)${RESET} Install TrustTunnel"
         echo -e "  ${YELLOW}2)${RESET} Uninstall TrustTunnel"
+        echo -e "  ${YELLOW}3)${RESET} Force Refresh Dependencies"
         echo -e "  ${YELLOW}0)${RESET} Return to main menu"
         echo ""
         echo -e "${WHITE}Your choice:${RESET} "
@@ -1205,6 +1352,7 @@ show_installation_menu() {
         case $choice in
             1) install_trusttunnel ;;
             2) uninstall_trusttunnel ;;
+            3) force_refresh_deps ;;
             0) break ;;
             *) print_error "Invalid choice"; pause ;;
         esac
@@ -1573,57 +1721,6 @@ show_system_info() {
     echo -e "${WHITE}Configured servers: $server_count${RESET}"
     echo -e "${WHITE}Configured clients: $client_count${RESET}"
     
-    pause
-}
-
-# ============================================================================
-# MAIN FUNCTION
-# ============================================================================
-
-main() {
-    # Initialize
-    set -e
-    
-    # Create log file
-    sudo touch "$LOG_FILE" 2>/dev/null || true
-    sudo chmod 666 "$LOG_FILE" 2>/dev/null || true
-    
-    log_message "INFO" "TrustTunnel Manager started"
-    
-    # Install dependencies
-    if ! install_dependencies; then
-        print_error "Failed to install dependencies"
-        exit 1
-    fi
-    
-    # Install Rust
-    if ! install_rust; then
-        print_error "Failed to install Rust"
-        exit 1
-    fi
-    
-    # Main menu loop
-    while true; do
-        show_main_menu
-        read -r choice
-        
-        case $choice in
-            1) show_installation_menu ;;
-            2) show_service_management_menu ;;
-            3) show_monitoring_menu ;;
-            4) show_tools_menu ;;
-            0)
-                echo -e "${GREEN}👋 Goodbye!${RESET}"
-                log_message "INFO" "TrustTunnel Manager exited"
-                exit 0
-                ;;
-            *)
-                print_error "Invalid choice"
-                pause
-                ;;
-        esac
-    done
-}
-
-# Run main function
-main "$@"
+    # Cache status
+    echo ""
+    echo -e "${BOLD_YELLOW}📦 Cache
