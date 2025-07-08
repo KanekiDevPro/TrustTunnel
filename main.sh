@@ -1174,29 +1174,125 @@ show_main_menu() {
     echo ""
     echo -e "${BOLD_GREEN}📋 MAIN MENU${RESET}"
     echo ""
-    echo -e "${WHITE}🔧 Installation & Setup:${RESET}"
-    echo -e "  ${YELLOW}1)${RESET} Install TrustTunnel"
-    echo -e "  ${YELLOW}2)${RESET} Uninstall TrustTunnel"
+    echo -e "  ${YELLOW}1)${RESET} ${WHITE}🔧 Installation & Setup${RESET}"
+    echo -e "  ${YELLOW}2)${RESET} ${WHITE}🌐 Service Management${RESET}"
+    echo -e "  ${YELLOW}3)${RESET} ${WHITE}📊 Monitoring & Maintenance${RESET}"
+    echo -e "  ${YELLOW}4)${RESET} ${WHITE}🛠️ Tools & Utilities${RESET}"
     echo ""
-    echo -e "${WHITE}🌐 Service Management:${RESET}"
-    echo -e "  ${YELLOW}3)${RESET} Add Server (Iran)"
-    echo -e "  ${YELLOW}4)${RESET} Add Client (Kharej)"
-    echo -e "  ${YELLOW}5)${RESET} Quick Service Operations"
-    echo ""
-    echo -e "${WHITE}📊 Monitoring & Maintenance:${RESET}"
-    echo -e "  ${YELLOW}6)${RESET} Service Overview"
-    echo -e "  ${YELLOW}7)${RESET} Setup Monitoring"
-    echo -e "  ${YELLOW}8)${RESET} View Service Logs"
-    echo ""
-    echo -e "${WHITE}🛠️ Tools & Utilities:${RESET}"
-    echo -e "  ${YELLOW}9)${RESET} Port Management"
-    echo -e "  ${YELLOW}10)${RESET} Connection Test"
-    echo -e "  ${YELLOW}11)${RESET} System Information"
-    echo ""
-    echo -e "  ${YELLOW}0)${RESET} Exit"
+    echo -e "  ${YELLOW}0)${RESET} ${RED}Exit${RESET}"
     echo ""
     draw_line "$GREEN" "-" 60
     echo -e "${WHITE}Your choice:${RESET} "
+}
+
+# Function to show installation menu
+show_installation_menu() {
+    while true; do
+        clear
+        draw_line "$CYAN" "=" 50
+        echo -e "${CYAN}        🔧 Installation & Setup${RESET}"
+        draw_line "$CYAN" "=" 50
+        echo ""
+        
+        echo -e "${WHITE}Select option:${RESET}"
+        echo -e "  ${YELLOW}1)${RESET} Install TrustTunnel"
+        echo -e "  ${YELLOW}2)${RESET} Uninstall TrustTunnel"
+        echo -e "  ${YELLOW}0)${RESET} Return to main menu"
+        echo ""
+        echo -e "${WHITE}Your choice:${RESET} "
+        read -r choice
+        
+        case $choice in
+            1) install_trusttunnel ;;
+            2) uninstall_trusttunnel ;;
+            0) break ;;
+            *) print_error "Invalid choice"; pause ;;
+        esac
+    done
+}
+
+# Function to show service management menu
+show_service_management_menu() {
+    while true; do
+        clear
+        draw_line "$GREEN" "=" 50
+        echo -e "${GREEN}        🌐 Service Management${RESET}"
+        draw_line "$GREEN" "=" 50
+        echo ""
+        
+        echo -e "${WHITE}Select option:${RESET}"
+        echo -e "  ${YELLOW}1)${RESET} Add Server (Iran)"
+        echo -e "  ${YELLOW}2)${RESET} Add Client (Kharej)"
+        echo -e "  ${YELLOW}3)${RESET} Quick Service Operations"
+        echo -e "  ${YELLOW}0)${RESET} Return to main menu"
+        echo ""
+        echo -e "${WHITE}Your choice:${RESET} "
+        read -r choice
+        
+        case $choice in
+            1) add_server ;;
+            2) add_client ;;
+            3) quick_service_operations ;;
+            0) break ;;
+            *) print_error "Invalid choice"; pause ;;
+        esac
+    done
+}
+
+# Function to show monitoring menu
+show_monitoring_menu() {
+    while true; do
+        clear
+        draw_line "$BLUE" "=" 50
+        echo -e "${BLUE}        📊 Monitoring & Maintenance${RESET}"
+        draw_line "$BLUE" "=" 50
+        echo ""
+        
+        echo -e "${WHITE}Select option:${RESET}"
+        echo -e "  ${YELLOW}1)${RESET} Service Overview"
+        echo -e "  ${YELLOW}2)${RESET} Setup Monitoring"
+        echo -e "  ${YELLOW}3)${RESET} View Service Logs"
+        echo -e "  ${YELLOW}0)${RESET} Return to main menu"
+        echo ""
+        echo -e "${WHITE}Your choice:${RESET} "
+        read -r choice
+        
+        case $choice in
+            1) show_service_overview ;;
+            2) setup_monitoring ;;
+            3) show_logs_menu ;;
+            0) break ;;
+            *) print_error "Invalid choice"; pause ;;
+        esac
+    done
+}
+
+# Function to show tools menu
+show_tools_menu() {
+    while true; do
+        clear
+        draw_line "$MAGENTA" "=" 50
+        echo -e "${MAGENTA}        🛠️ Tools & Utilities${RESET}"
+        draw_line "$MAGENTA" "=" 50
+        echo ""
+        
+        echo -e "${WHITE}Select option:${RESET}"
+        echo -e "  ${YELLOW}1)${RESET} Port Management"
+        echo -e "  ${YELLOW}2)${RESET} Connection Test"
+        echo -e "  ${YELLOW}3)${RESET} System Information"
+        echo -e "  ${YELLOW}0)${RESET} Return to main menu"
+        echo ""
+        echo -e "${WHITE}Your choice:${RESET} "
+        read -r choice
+        
+        case $choice in
+            1) show_port_management_menu ;;
+            2) test_connection ;;
+            3) show_system_info ;;
+            0) break ;;
+            *) print_error "Invalid choice"; pause ;;
+        esac
+    done
 }
 
 # Function to show service logs menu
@@ -1512,17 +1608,10 @@ main() {
         read -r choice
         
         case $choice in
-            1) install_trusttunnel ;;
-            2) uninstall_trusttunnel ;;
-            3) add_server ;;
-            4) add_client ;;
-            5) quick_service_operations ;;
-            6) show_service_overview ;;
-            7) setup_monitoring ;;
-            8) show_logs_menu ;;
-            9) show_port_management_menu ;;
-            10) test_connection ;;
-            11) show_system_info ;;
+            1) show_installation_menu ;;
+            2) show_service_management_menu ;;
+            3) show_monitoring_menu ;;
+            4) show_tools_menu ;;
             0)
                 echo -e "${GREEN}👋 Goodbye!${RESET}"
                 log_message "INFO" "TrustTunnel Manager exited"
