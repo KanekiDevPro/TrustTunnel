@@ -766,7 +766,13 @@ add_new_client_action() {
             print_error "Invalid format. Use: domain:port or ip:port"
         fi
     done
-    
+
+    # Extract server port from server address
+    local server_port=""
+    if [[ "$server_addr" =~ :([0-9]+)$ ]]; then
+        server_port="${BASH_REMATCH[1]}"
+    fi
+
     echo ""
     
     # Get tunnel mode
@@ -874,6 +880,12 @@ add_new_client_action() {
                     ;;
             esac
         done
+
+        # Also open server connection port if it's not standard
+        if [ -n "$server_port" ] && [ "$server_port" != "80" ] && [ "$server_port" != "443" ]; then
+            echo -e "${CYAN}🔥 Opening server connection port in firewall...${RESET}"
+            open_firewall_port "$server_port" "tcp"
+        fi
     fi
 
     echo ""
