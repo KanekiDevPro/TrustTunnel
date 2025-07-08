@@ -200,6 +200,23 @@ uninstall_trusttunnel_action() {
             print_warning "No TrustTunnel services found"
         fi
         
+        # Ask about closing firewall ports
+        echo ""
+        echo -e "${YELLOW}Do you want to close TrustTunnel ports in firewall? (y/N):${RESET} "
+        read -r close_firewall_choice
+        
+        if [[ "$close_firewall_choice" =~ ^[Yy]$ ]]; then
+            echo -e "${CYAN}🔥 Scanning for TrustTunnel ports to close...${RESET}"
+            
+            # Close common TrustTunnel ports
+            local common_ports=("6060" "8800" "8801" "8802" "8803" "8804" "8805")
+            for port in "${common_ports[@]}"; do
+                close_firewall_port "$port" "both"
+            done
+            
+            print_success "Common TrustTunnel ports closed in firewall"
+        fi
+        
         # Remove rstun folder
         if [ -d "rstun" ]; then
             echo -e "${CYAN}🗑️ Removing 'rstun' folder...${RESET}"
@@ -343,6 +360,145 @@ validate_port() {
     fi
 }
 
+# Function to detect firewall type
+detect_firewall() {
+    if command_exists ufw && ufw status >/dev/null 2>&1; then
+        echo "ufw"
+    elif command_exists iptables; then
+        echo "iptables"
+    else
+        echo "none"
+    fi
+}
+
+# Function to open port in firewall
+open_firewall_port() {
+    local port="$1"
+    local protocol="$2"  # tcp, udp, or both
+    local firewall_type=$(detect_firewall)
+    
+    case "$firewall_type" in
+        "ufw")
+            echo -e "${CYAN}🔥 Opening port $port ($protocol) in UFW firewall...${RESET}"
+            case "$protocol" in
+                "tcp")
+                    sudo ufw allow "$port/tcp" >/dev/null 2>&1
+                    ;;
+                "udp")
+                    sudo ufw allow "$port/udp" >/dev/null 2>&1
+                    ;;
+                "both")
+                    sudo ufw allow "$port/tcp" >/dev/null 2>&1
+                    sudo ufw allow "$port/udp" >/dev/null 2>&1
+                    ;;
+            esac
+            print_success "Port $port ($protocol) opened in UFW"
+            ;;
+        "iptables")
+            echo -e "${CYAN}🔥 Opening port $port ($protocol) in iptables firewall...${RESET}"
+            case "$protocol" in
+                "tcp")
+                    sudo iptables -A INPUT -p tcp --dport "$port" -j ACCEPT >/dev/null 2>&1
+                    ;;
+                "udp")
+                    sudo iptables -A INPUT -p udp --dport "$port" -j ACCEPT >/dev/null 2>&1
+                    ;;
+                "both")
+                    sudo iptables -A INPUT -p tcp --dport "$port" -j ACCEPT >/dev/null 2>&1
+                    sudo iptables -A INPUT -p udp --dport "$port" -j ACCEPT >/dev/null 2>&1
+                    ;;
+            esac
+            
+            # Save iptables rules
+            if command_exists iptables-save && command_exists netfilter-persistent; then
+                sudo netfilter-persistent save >/dev/null 2>&1
+            elif [ -f /etc/iptables/rules.v4 ]; then
+                sudo iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
+            fi
+            
+            print_success "Port $port ($protocol) opened in iptables"
+            ;;
+        "none")
+            print_warning "No supported firewall detected (UFW/iptables)"
+            ;;
+    esac
+}
+
+# Function to close port in firewall
+close_firewall_port() {
+    local port="$1"
+    local protocol="$2"  # tcp, udp, or both
+    local firewall_type=$(detect_firewall)
+    
+    case "$firewall_type" in
+        "ufw")
+            echo -e "${CYAN}🔥 Closing port $port ($protocol) in UFW firewall...${RESET}"
+            case "$protocol" in
+                "tcp")
+                    sudo ufw delete allow "$port/tcp" >/dev/null 2>&1
+                    ;;
+                "udp")
+                    sudo ufw delete allow "$port/udp" >/dev/null 2>&1
+                    ;;
+                "both")
+                    sudo ufw delete allow "$port/tcp" >/dev/null 2>&1
+                    sudo ufw delete allow "$port/udp" >/dev/null 2>&1
+                    ;;
+            esac
+            print_success "Port $port ($protocol) closed in UFW"
+            ;;
+        "iptables")
+            echo -e "${CYAN}🔥 Closing port $port ($protocol) in iptables firewall...${RESET}"
+            case "$protocol" in
+                "tcp")
+                    sudo iptables -D INPUT -p tcp --dport "$port" -j ACCEPT >/dev/null 2>&1
+                    ;;
+                "udp")
+                    sudo iptables -D INPUT -p udp --dport "$port" -j ACCEPT >/dev/null 2>&1
+                    ;;
+                "both")
+                    sudo iptables -D INPUT -p tcp --dport "$port" -j ACCEPT >/dev/null 2>&1
+                    sudo iptables -D INPUT -p udp --dport "$port" -j ACCEPT >/dev/null 2>&1
+                    ;;
+            esac
+            
+            # Save iptables rules
+            if command_exists iptables-save && command_exists netfilter-persistent; then
+                sudo netfilter-persistent save >/dev/null 2>&1
+            elif [ -f /etc/iptables/rules.v4 ]; then
+                sudo iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
+            fi
+            
+            print_success "Port $port ($protocol) closed in iptables"
+            ;;
+        "none")
+            print_warning "No supported firewall detected (UFW/iptables)"
+            ;;
+    esac
+}
+
+# Function to ask user about firewall configuration
+ask_firewall_config() {
+    local firewall_type=$(detect_firewall)
+    
+    if [ "$firewall_type" != "none" ]; then
+        echo ""
+        echo -e "${CYAN}🔥 Firewall Configuration:${RESET}"
+        echo -e "${WHITE}Detected firewall: $firewall_type${RESET}"
+        echo -e "${YELLOW}Do you want to automatically open the required ports in firewall? (Y/n):${RESET} "
+        read -r firewall_choice
+        
+        if [[ "$firewall_choice" =~ ^[Nn]$ ]]; then
+            return 1  # User chose not to configure firewall
+        else
+            return 0  # User chose to configure firewall
+        fi
+    else
+        print_warning "No supported firewall detected. Skipping firewall configuration."
+        return 1
+    fi
+}
+
 # Function to add new server
 add_new_server_action() {
     clear
@@ -471,6 +627,24 @@ add_new_server_action() {
             print_error "Password cannot be empty"
         fi
     done
+    
+    # Ask about firewall configuration
+    local configure_firewall=false
+    if ask_firewall_config; then
+        configure_firewall=true
+        
+        # Open listen port
+        open_firewall_port "$listen_port" "tcp"
+        
+        # Open upstream ports if different from listen port
+        if [ "$tcp_upstream_port" != "$listen_port" ]; then
+            open_firewall_port "$tcp_upstream_port" "tcp"
+        fi
+        
+        if [ "$udp_upstream_port" != "$listen_port" ] && [ "$udp_upstream_port" != "$tcp_upstream_port" ]; then
+            open_firewall_port "$udp_upstream_port" "udp"
+        fi
+    fi
     
     echo ""
     
@@ -676,6 +850,32 @@ add_new_client_action() {
         done
     done
     
+    # Ask about firewall configuration
+    local configure_firewall=false
+    if ask_firewall_config; then
+        configure_firewall=true
+        
+        # Extract ports from mappings and open them
+        echo -e "${CYAN}🔥 Opening client ports in firewall...${RESET}"
+        IFS=',' read -ra MAPPING_ARRAY <<< "$mappings"
+        for mapping in "${MAPPING_ARRAY[@]}"; do
+            # Extract port from mapping format: IN^0.0.0.0:PORT^0.0.0.0:PORT
+            local port=$(echo "$mapping" | cut -d'^' -f2 | cut -d':' -f2)
+            
+            case "$tunnel_mode" in
+                "tcp")
+                    open_firewall_port "$port" "tcp"
+                    ;;
+                "udp")
+                    open_firewall_port "$port" "udp"
+                    ;;
+                "both")
+                    open_firewall_port "$port" "both"
+                    ;;
+            esac
+        done
+    fi
+    
     # Determine mapping arguments based on tunnel mode
     local mapping_args=""
     case "$tunnel_mode" in
@@ -826,6 +1026,38 @@ delete_client_menu() {
                 
                 sudo systemctl daemon-reload
                 print_success "Client '$selected_service' deleted successfully"
+                
+                # Ask about closing firewall ports
+                echo ""
+                echo -e "${YELLOW}Do you want to close the client ports in firewall? (y/N):${RESET} "
+                read -r close_ports_choice
+                
+                if [[ "$close_ports_choice" =~ ^[Yy]$ ]]; then
+                    # Try to extract ports from service file before deletion
+                    if [ -f "$service_file" ]; then
+                        # Extract mapping arguments from service file
+                        local tcp_mappings=$(grep -o '\--tcp-mappings "[^"]*"' "$service_file" | sed 's/--tcp-mappings "//;s/"//')
+                        local udp_mappings=$(grep -o '\--udp-mappings "[^"]*"' "$service_file" | sed 's/--udp-mappings "//;s/"//')
+                        
+                        # Close TCP ports
+                        if [ -n "$tcp_mappings" ]; then
+                            IFS=',' read -ra TCP_ARRAY <<< "$tcp_mappings"
+                            for mapping in "${TCP_ARRAY[@]}"; do
+                                local port=$(echo "$mapping" | cut -d'^' -f2 | cut -d':' -f2)
+                                close_firewall_port "$port" "tcp"
+                            done
+                        fi
+                        
+                        # Close UDP ports
+                        if [ -n "$udp_mappings" ]; then
+                            IFS=',' read -ra UDP_ARRAY <<< "$udp_mappings"
+                            for mapping in "${UDP_ARRAY[@]}"; do
+                                local port=$(echo "$mapping" | cut -d'^' -f2 | cut -d':' -f2)
+                                close_firewall_port "$port" "udp"
+                            done
+                        fi
+                    fi
+                fi
             else
                 print_warning "Deletion cancelled"
             fi
@@ -887,6 +1119,28 @@ server_management_menu() {
                         sudo rm -f "$service_file" 2>/dev/null || true
                         sudo systemctl daemon-reload
                         print_success "Server service deleted"
+                        
+                        # Ask about closing firewall ports
+                        echo ""
+                        echo -e "${YELLOW}Do you want to close the server ports in firewall? (y/N):${RESET} "
+                        read -r close_ports_choice
+                        
+                        if [[ "$close_ports_choice" =~ ^[Yy]$ ]]; then
+                            # Try to extract ports from service file before deletion
+                            if [ -f "$service_file" ]; then
+                                local listen_port=$(grep -o '\--addr [^:]*:$$[0-9]*$$' "$service_file" | cut -d':' -f2 || echo "6060")
+                                local tcp_port=$(grep -o '\--tcp-upstream $$[0-9]*$$' "$service_file" | awk '{print $2}' || echo "8800")
+                                local udp_port=$(grep -o '\--udp-upstream $$[0-9]*$$' "$service_file" | awk '{print $2}' || echo "8800")
+                                
+                                close_firewall_port "$listen_port" "tcp"
+                                if [ "$tcp_port" != "$listen_port" ]; then
+                                    close_firewall_port "$tcp_port" "tcp"
+                                fi
+                                if [ "$udp_port" != "$listen_port" ] && [ "$udp_port" != "$tcp_port" ]; then
+                                    close_firewall_port "$udp_port" "udp"
+                                fi
+                            fi
+                        fi
                     else
                         print_warning "Deletion cancelled"
                     fi
