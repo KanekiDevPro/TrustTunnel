@@ -1522,7 +1522,9 @@ tunnel_management_menu() {
         echo ""
         echo -e "  ${YELLOW}1)${RESET} ${MAGENTA}Server (Iran)${RESET}"
         echo -e "  ${YELLOW}2)${RESET} ${BLUE}Client (Kharej)${RESET}"
-        echo -e "  ${YELLOW}3)${RESET} ${WHITE}Return to main menu${RESET}"
+        echo -e "  ${YELLOW}3)${RESET} ${WHITE}Service Auto-Restart Setup${RESET}"
+        echo -e "  ${YELLOW}4)${RESET} ${WHITE}Cron Job Management${RESET}"
+        echo -e "  ${YELLOW}5)${RESET} ${WHITE}Return to main menu${RESET}"
         echo ""
         draw_line "$GREEN" "-" 40
         echo -e "${WHITE}Your choice:${RESET} "
@@ -1537,6 +1539,286 @@ tunnel_management_menu() {
                 client_management_menu
                 ;;
             3)
+                setup_service_restart_timer
+                ;;
+            4)
+                cron_job_management
+                ;;
+            5)
+                break
+                ;;
+            *)
+                print_error "Invalid option"
+                echo ""
+                echo -e "${YELLOW}Press Enter to continue...${RESET}"
+                read -r
+                ;;
+        esac
+    done
+}
+
+# Function to setup service restart timer
+setup_service_restart_timer() {
+    clear
+    echo ""
+    draw_line "$CYAN" "=" 40
+    echo -e "${CYAN}        🔄 Service Auto-Restart Setup${RESET}"
+    draw_line "$CYAN" "=" 40
+    echo ""
+    
+    echo -e "${CYAN}🔧 Setting up service auto-restart timer...${RESET}"
+    
+    # Create monitoring script
+    local monitor_script="/usr/local/bin/trusttunnel-monitor.sh"
+    cat <<'EOF' | sudo tee "$monitor_script" > /dev/null
+#!/bin/bash
+# TrustTunnel Service Auto-Restart Script
+
+LOG_FILE="/var/log/trusttunnel-monitor.log"
+
+log_message() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"
+}
+
+check_and_restart_service() {
+    local service_name="$1"
+    if systemctl is-active --quiet "$service_name"; then
+        log_message "✅ $service_name is running"
+        return 0
+    else
+        log_message "❌ $service_name is not running - attempting restart"
+        if systemctl restart "$service_name"; then
+            log_message "✅ Successfully restarted $service_name"
+            return 0
+        else
+            log_message "❌ Failed to restart $service_name"
+            return 1
+        fi
+    fi
+}
+
+log_message "Starting service monitoring check..."
+
+# Check server service
+if systemctl list-unit-files | grep -q "trusttunnel.service"; then
+    check_and_restart_service "trusttunnel.service"
+fi
+
+# Check client services
+for service in $(systemctl list-units --type=service --all | grep 'trusttunnel-' | awk '{print $1}'); do
+    check_and_restart_service "$service"
+done
+
+log_message "Service monitoring check completed"
+EOF
+    
+    sudo chmod +x "$monitor_script"
+    
+    # Setup systemd timer
+    local timer_file="/etc/systemd/system/trusttunnel-monitor.timer"
+    cat <<EOF | sudo tee "$timer_file" > /dev/null
+[Unit]
+Description=TrustTunnel Service Monitor Timer
+Requires=trusttunnel-monitor.service
+
+[Timer]
+OnCalendar=*:0/5
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+    
+    # Setup systemd service
+    local service_file="/etc/systemd/system/trusttunnel-monitor.service"
+    cat <<EOF | sudo tee "$service_file" > /dev/null
+[Unit]
+Description=TrustTunnel Service Monitor
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=$monitor_script
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    
+    sudo systemctl daemon-reload
+    sudo systemctl enable trusttunnel-monitor.timer
+    sudo systemctl start trusttunnel-monitor.timer
+    
+    print_success "Service auto-restart timer configured successfully"
+    echo -e "${WHITE}• Monitor script: $monitor_script${RESET}"
+    echo -e "${WHITE}• Runs every 5 minutes${RESET}"
+    echo -e "${WHITE}• Log file: /var/log/trusttunnel-monitor.log${RESET}"
+    echo -e "${WHITE}• Auto-restart failed services${RESET}"
+    
+    echo ""
+    echo -e "${YELLOW}Press Enter to return...${RESET}"
+    read -r
+}
+
+# Function to manage cron jobs
+cron_job_management() {
+    while true; do
+        clear
+        echo ""
+        draw_line "$CYAN" "=" 40
+        echo -e "${CYAN}        ⏰ Cron Job Management${RESET}"
+        draw_line "$CYAN" "=" 40
+        echo ""
+        
+        echo -e "${WHITE}Select an option:${RESET}"
+        echo -e "  ${YELLOW}1)${RESET} ${WHITE}View current cron jobs${RESET}"
+        echo -e "  ${YELLOW}2)${RESET} ${WHITE}Add service restart cron job${RESET}"
+        echo -e "  ${YELLOW}3)${RESET} ${WHITE}Add log cleanup cron job${RESET}"
+        echo -e "  ${YELLOW}4)${RESET} ${WHITE}Remove TrustTunnel cron jobs${RESET}"
+        echo -e "  ${YELLOW}5)${RESET} ${WHITE}Return${RESET}"
+        echo ""
+        draw_line "$CYAN" "-" 40
+        echo -e "${WHITE}Your choice:${RESET} "
+        read -r cron_choice
+        echo ""
+        
+        case $cron_choice in
+            1)
+                echo -e "${CYAN}📋 Current cron jobs:${RESET}"
+                crontab -l 2>/dev/null || echo "No cron jobs found"
+                echo ""
+                echo -e "${YELLOW}Press Enter to continue...${RESET}"
+                read -r
+                ;;
+            2)
+                echo -e "${CYAN}⏰ Adding service restart cron job...${RESET}"
+                
+                echo -e "${WHITE}Select restart frequency:${RESET}"
+                echo -e "  ${YELLOW}1)${RESET} Every 5 minutes"
+                echo -e "  ${YELLOW}2)${RESET} Every 15 minutes"
+                echo -e "  ${YELLOW}3)${RESET} Every hour"
+                echo -e "  ${YELLOW}4)${RESET} Every 6 hours"
+                echo -e "  ${YELLOW}5)${RESET} Daily at 2 AM"
+                echo ""
+                echo -e "${WHITE}Your choice:${RESET} "
+                read -r freq_choice
+                
+                local cron_schedule=""
+                case $freq_choice in
+                    1) cron_schedule="*/5 * * * *" ;;
+                    2) cron_schedule="*/15 * * * *" ;;
+                    3) cron_schedule="0 * * * *" ;;
+                    4) cron_schedule="0 */6 * * *" ;;
+                    5) cron_schedule="0 2 * * *" ;;
+                    *) 
+                        print_error "Invalid choice"
+                        continue
+                        ;;
+                esac
+                
+                # Create restart script
+                local restart_script="/usr/local/bin/trusttunnel-cron-restart.sh"
+                cat <<'EOF' | sudo tee "$restart_script" > /dev/null
+#!/bin/bash
+# TrustTunnel Cron Restart Script
+
+LOG_FILE="/var/log/trusttunnel-cron.log"
+
+log_message() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"
+}
+
+log_message "Starting cron restart check..."
+
+# Restart server service if exists and running
+if systemctl is-enabled --quiet trusttunnel.service 2>/dev/null; then
+    systemctl restart trusttunnel.service
+    log_message "Restarted trusttunnel.service"
+fi
+
+# Restart client services
+for service in $(systemctl list-units --type=service --state=active | grep 'trusttunnel-' | awk '{print $1}'); do
+    systemctl restart "$service"
+    log_message "Restarted $service"
+done
+
+log_message "Cron restart completed"
+EOF
+                
+                sudo chmod +x "$restart_script"
+                
+                # Add cron job
+                local cron_job="$cron_schedule $restart_script"
+                (crontab -l 2>/dev/null | grep -v "$restart_script"; echo "$cron_job") | crontab -
+                
+                print_success "Service restart cron job added successfully"
+                echo -e "${WHITE}• Schedule: $cron_schedule${RESET}"
+                echo -e "${WHITE}• Script: $restart_script${RESET}"
+                echo -e "${WHITE}• Log: /var/log/trusttunnel-cron.log${RESET}"
+                
+                echo ""
+                echo -e "${YELLOW}Press Enter to continue...${RESET}"
+                read -r
+                ;;
+            3)
+                echo -e "${CYAN}🧹 Adding log cleanup cron job...${RESET}"
+                
+                # Create log cleanup script
+                local cleanup_script="/usr/local/bin/trusttunnel-log-cleanup.sh"
+                cat <<'EOF' | sudo tee "$cleanup_script" > /dev/null
+#!/bin/bash
+# TrustTunnel Log Cleanup Script
+
+LOG_FILES=(
+    "/var/log/trusttunnel-monitor.log"
+    "/var/log/trusttunnel-cron.log"
+)
+
+for log_file in "${LOG_FILES[@]}"; do
+    if [ -f "$log_file" ]; then
+        # Keep only last 1000 lines
+        tail -1000 "$log_file" > "${log_file}.tmp"
+        mv "${log_file}.tmp" "$log_file"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - Cleaned $log_file"
+    fi
+done
+
+# Clean systemd journal logs older than 7 days
+journalctl --vacuum-time=7d >/dev/null 2>&1
+EOF
+                
+                sudo chmod +x "$cleanup_script"
+                
+                # Add weekly cleanup cron job
+                local cleanup_cron="0 3 * * 0 $cleanup_script"
+                (crontab -l 2>/dev/null | grep -v "$cleanup_script"; echo "$cleanup_cron") | crontab -
+                
+                print_success "Log cleanup cron job added successfully"
+                echo -e "${WHITE}• Runs weekly on Sunday at 3 AM${RESET}"
+                echo -e "${WHITE}• Script: $cleanup_script${RESET}"
+                echo -e "${WHITE}• Keeps last 1000 lines of logs${RESET}"
+                
+                echo ""
+                echo -e "${YELLOW}Press Enter to continue...${RESET}"
+                read -r
+                ;;
+            4)
+                echo -e "${CYAN}🗑️ Removing TrustTunnel cron jobs...${RESET}"
+                
+                # Remove cron jobs
+                crontab -l 2>/dev/null | grep -v "trusttunnel" | crontab -
+                
+                # Remove scripts
+                sudo rm -f /usr/local/bin/trusttunnel-cron-restart.sh
+                sudo rm -f /usr/local/bin/trusttunnel-log-cleanup.sh
+                
+                print_success "TrustTunnel cron jobs removed"
+                
+                echo ""
+                echo -e "${YELLOW}Press Enter to continue...${RESET}"
+                read -r
+                ;;
+            5)
                 break
                 ;;
             *)
@@ -1597,9 +1879,8 @@ main() {
         echo -e "${MAGENTA}1) Install TrustTunnel${RESET}"
         echo -e "${CYAN}2) Tunnel Management${RESET}"
         echo -e "${BLUE}3) Service Status${RESET}"
-        echo -e "${GREEN}4) Advanced Management${RESET}"
-        echo -e "${RED}5) Uninstall TrustTunnel${RESET}"
-        echo -e "${WHITE}6) Exit${RESET}"
+        echo -e "${RED}4) Uninstall TrustTunnel${RESET}"
+        echo -e "${WHITE}5) Exit${RESET}"
         echo ""
         echo -e "${WHITE}Your choice:${RESET} "
         read -r choice
@@ -1615,12 +1896,9 @@ main() {
                 show_all_services_status
                 ;;
             4)
-                advanced_management_menu
-                ;;
-            5)
                 uninstall_trusttunnel_action
                 ;;
-            6)
+            5)
                 echo -e "${GREEN}👋 Goodbye!${RESET}"
                 exit 0
                 ;;
@@ -1632,488 +1910,6 @@ main() {
                 ;;
         esac
     done
-}
-
-# Function to setup SSL certificate auto-renewal
-setup_ssl_renewal() {
-    clear
-    echo ""
-    draw_line "$CYAN" "=" 40
-    echo -e "${CYAN}        🔐 SSL Certificate Auto-Renewal${RESET}"
-    draw_line "$CYAN" "=" 40
-    echo ""
-    
-    echo -e "${CYAN}🔍 Checking existing SSL certificates...${RESET}"
-    local cert_dirs=$(sudo find /etc/letsencrypt/live -maxdepth 1 -type d -name "*.* " 2>/dev/null | head -10)
-    
-    if [ -z "$cert_dirs" ]; then
-        print_error "No SSL certificates found"
-        echo ""
-        echo -e "${YELLOW}Press Enter to return...${RESET}"
-        read -r
-        return
-    fi
-    
-    echo -e "${GREEN}Found SSL certificates:${RESET}"
-    echo "$cert_dirs" | while read -r cert_dir; do
-        local domain=$(basename "$cert_dir")
-        echo -e "  ${WHITE}• $domain${RESET}"
-    done
-    
-    echo ""
-    echo -e "${CYAN}📅 Setting up auto-renewal cron job...${RESET}"
-    
-    # Create renewal script
-    local renewal_script="/usr/local/bin/trusttunnel-ssl-renewal.sh"
-    cat <<'EOF' | sudo tee "$renewal_script" > /dev/null
-#!/bin/bash
-# TrustTunnel SSL Certificate Auto-Renewal Script
-
-LOG_FILE="/var/log/trusttunnel-ssl-renewal.log"
-
-log_message() {
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"
-}
-
-log_message "Starting SSL certificate renewal check..."
-
-# Renew certificates
-if certbot renew --quiet; then
-    log_message "Certificate renewal check completed successfully"
-    
-    # Restart TrustTunnel services if certificates were renewed
-    if systemctl is-active --quiet trusttunnel.service; then
-        systemctl restart trusttunnel.service
-        log_message "Restarted trusttunnel.service"
-    fi
-    
-    # Restart client services
-    for service in $(systemctl list-units --type=service --state=active | grep 'trusttunnel-' | awk '{print $1}'); do
-        systemctl restart "$service"
-        log_message "Restarted $service"
-    done
-    
-else
-    log_message "Certificate renewal failed"
-fi
-
-log_message "SSL renewal process completed"
-EOF
-    
-    sudo chmod +x "$renewal_script"
-    
-    # Add cron job (runs twice daily)
-    local cron_job="0 */12 * * * $renewal_script"
-    (crontab -l 2>/dev/null | grep -v "$renewal_script"; echo "$cron_job") | crontab -
-    
-    print_success "SSL auto-renewal configured successfully"
-    echo -e "${WHITE}• Renewal script: $renewal_script${RESET}"
-    echo -e "${WHITE}• Runs twice daily at 00:00 and 12:00${RESET}"
-    echo -e "${WHITE}• Log file: /var/log/trusttunnel-ssl-renewal.log${RESET}"
-    
-    echo ""
-    echo -e "${YELLOW}Press Enter to return...${RESET}"
-    read -r
-}
-
-# Function to setup service monitoring
-setup_service_monitoring() {
-    clear
-    echo ""
-    draw_line "$CYAN" "=" 40
-    echo -e "${CYAN}        📊 Service Monitoring Setup${RESET}"
-    draw_line "$CYAN" "=" 40
-    echo ""
-    
-    echo -e "${CYAN}🔧 Setting up service monitoring...${RESET}"
-    
-    # Create monitoring script
-    local monitor_script="/usr/local/bin/trusttunnel-monitor.sh"
-    cat <<'EOF' | sudo tee "$monitor_script" > /dev/null
-#!/bin/bash
-# TrustTunnel Service Monitoring Script
-
-LOG_FILE="/var/log/trusttunnel-monitor.log"
-ALERT_EMAIL=""
-
-log_message() {
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"
-}
-
-check_service() {
-    local service_name="$1"
-    if systemctl is-active --quiet "$service_name"; then
-        log_message "✅ $service_name is running"
-        return 0
-    else
-        log_message "❌ $service_name is not running - attempting restart"
-        if systemctl restart "$service_name"; then
-            log_message "✅ Successfully restarted $service_name"
-            return 0
-        else
-            log_message "❌ Failed to restart $service_name"
-            return 1
-        fi
-    fi
-}
-
-log_message "Starting service monitoring check..."
-
-# Check server service
-if systemctl list-unit-files | grep -q "trusttunnel.service"; then
-    check_service "trusttunnel.service"
-fi
-
-# Check client services
-for service in $(systemctl list-units --type=service --all | grep 'trusttunnel-' | awk '{print $1}'); do
-    check_service "$service"
-done
-
-log_message "Service monitoring check completed"
-EOF
-    
-    sudo chmod +x "$monitor_script"
-    
-    # Setup systemd timer
-    local timer_file="/etc/systemd/system/trusttunnel-monitor.timer"
-    cat <<EOF | sudo tee "$timer_file" > /dev/null
-[Unit]
-Description=TrustTunnel Service Monitor Timer
-Requires=trusttunnel-monitor.service
-
-[Timer]
-OnCalendar=*:0/5
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-EOF
-    
-    # Setup systemd service
-    local service_file="/etc/systemd/system/trusttunnel-monitor.service"
-    cat <<EOF | sudo tee "$service_file" > /dev/null
-[Unit]
-Description=TrustTunnel Service Monitor
-After=network.target
-
-[Service]
-Type=oneshot
-ExecStart=$monitor_script
-User=root
-
-[Install]
-WantedBy=multi-user.target
-EOF
-    
-    sudo systemctl daemon-reload
-    sudo systemctl enable trusttunnel-monitor.timer
-    sudo systemctl start trusttunnel-monitor.timer
-    
-    print_success "Service monitoring configured successfully"
-    echo -e "${WHITE}• Monitor script: $monitor_script${RESET}"
-    echo -e "${WHITE}• Runs every 5 minutes${RESET}"
-    echo -e "${WHITE}• Log file: /var/log/trusttunnel-monitor.log${RESET}"
-    echo -e "${WHITE}• Auto-restart failed services${RESET}"
-    
-    echo ""
-    echo -e "${YELLOW}Press Enter to return...${RESET}"
-    read -r
-}
-
-# Function to setup backup system
-setup_backup_system() {
-    clear
-    echo ""
-    draw_line "$CYAN" "=" 40
-    echo -e "${CYAN}        💾 Backup System Setup${RESET}"
-    draw_line "$CYAN" "=" 40
-    echo ""
-    
-    echo -e "${WHITE}Enter backup directory path (default: /opt/trusttunnel-backups):${RESET} "
-    read -r backup_dir
-    backup_dir=${backup_dir:-/opt/trusttunnel-backups}
-    
-    echo -e "${CYAN}📁 Creating backup directory...${RESET}"
-    sudo mkdir -p "$backup_dir"
-    
-    # Create backup script
-    local backup_script="/usr/local/bin/trusttunnel-backup.sh"
-    cat <<EOF | sudo tee "$backup_script" > /dev/null
-#!/bin/bash
-# TrustTunnel Backup Script
-
-BACKUP_DIR="$backup_dir"
-LOG_FILE="/var/log/trusttunnel-backup.log"
-DATE=\$(date +%Y%m%d_%H%M%S)
-BACKUP_NAME="trusttunnel_backup_\$DATE"
-
-log_message() {
-    echo "\$(date '+%Y-%m-%d %H:%M:%S') - \$1" >> "\$LOG_FILE"
-}
-
-log_message "Starting backup process..."
-
-# Create backup directory
-mkdir -p "\$BACKUP_DIR/\$BACKUP_NAME"
-
-# Backup service files
-log_message "Backing up service files..."
-sudo cp -r /etc/systemd/system/trusttunnel*.service "\$BACKUP_DIR/\$BACKUP_NAME/" 2>/dev/null || true
-
-# Backup rstun binaries
-if [ -d "rstun" ]; then
-    log_message "Backing up rstun binaries..."
-    cp -r rstun "\$BACKUP_DIR/\$BACKUP_NAME/"
-fi
-
-# Backup SSL certificates
-log_message "Backing up SSL certificates..."
-sudo cp -r /etc/letsencrypt "\$BACKUP_DIR/\$BACKUP_NAME/" 2>/dev/null || true
-
-# Backup configuration
-log_message "Backing up configuration..."
-echo "# TrustTunnel Backup Information" > "\$BACKUP_DIR/\$BACKUP_NAME/backup_info.txt"
-echo "Date: \$(date)" >> "\$BACKUP_DIR/\$BACKUP_NAME/backup_info.txt"
-echo "Hostname: \$(hostname)" >> "\$BACKUP_DIR/\$BACKUP_NAME/backup_info.txt"
-systemctl list-units --type=service | grep trusttunnel >> "\$BACKUP_DIR/\$BACKUP_NAME/backup_info.txt"
-
-# Create archive
-cd "\$BACKUP_DIR"
-tar -czf "\$BACKUP_NAME.tar.gz" "\$BACKUP_NAME"
-rm -rf "\$BACKUP_NAME"
-
-# Keep only last 7 backups
-ls -t \$BACKUP_DIR/trusttunnel_backup_*.tar.gz | tail -n +8 | xargs -r rm
-
-log_message "Backup completed: \$BACKUP_NAME.tar.gz"
-EOF
-    
-    sudo chmod +x "$backup_script"
-    
-    # Setup cron job for daily backup
-    local cron_job="0 2 * * * $backup_script"
-    (crontab -l 2>/dev/null | grep -v "$backup_script"; echo "$cron_job") | crontab -
-    
-    print_success "Backup system configured successfully"
-    echo -e "${WHITE}• Backup directory: $backup_dir${RESET}"
-    echo -e "${WHITE}• Backup script: $backup_script${RESET}"
-    echo -e "${WHITE}• Runs daily at 2:00 AM${RESET}"
-    echo -e "${WHITE}• Keeps last 7 backups${RESET}"
-    echo -e "${WHITE}• Log file: /var/log/trusttunnel-backup.log${RESET}"
-    
-    echo ""
-    echo -e "${YELLOW}Press Enter to return...${RESET}"
-    read -r
-}
-
-# Function to view system logs
-view_system_logs() {
-    clear
-    echo ""
-    draw_line "$CYAN" "=" 40
-    echo -e "${CYAN}        📋 System Logs Viewer${RESET}"
-    draw_line "$CYAN" "=" 40
-    echo ""
-    
-    echo -e "${WHITE}Select log type:${RESET}"
-    echo -e "  ${YELLOW}1)${RESET} SSL Renewal Logs"
-    echo -e "  ${YELLOW}2)${RESET} Service Monitor Logs"
-    echo -e "  ${YELLOW}3)${RESET} Backup Logs"
-    echo -e "  ${YELLOW}4)${RESET} System Journal (TrustTunnel)"
-    echo -e "  ${YELLOW}5)${RESET} Return"
-    echo ""
-    echo -e "${WHITE}Your choice:${RESET} "
-    read -r log_choice
-    
-    case $log_choice in
-        1)
-            if [ -f "/var/log/trusttunnel-ssl-renewal.log" ]; then
-                echo -e "${CYAN}📋 SSL Renewal Logs:${RESET}"
-                tail -50 /var/log/trusttunnel-ssl-renewal.log
-            else
-                print_warning "SSL renewal log not found"
-            fi
-            ;;
-        2)
-            if [ -f "/var/log/trusttunnel-monitor.log" ]; then
-                echo -e "${CYAN}📋 Service Monitor Logs:${RESET}"
-                tail -50 /var/log/trusttunnel-monitor.log
-            else
-                print_warning "Monitor log not found"
-            fi
-            ;;
-        3)
-            if [ -f "/var/log/trusttunnel-backup.log" ]; then
-                echo -e "${CYAN}📋 Backup Logs:${RESET}"
-                tail -50 /var/log/trusttunnel-backup.log
-            else
-                print_warning "Backup log not found"
-            fi
-            ;;
-        4)
-            echo -e "${CYAN}📋 System Journal (TrustTunnel Services):${RESET}"
-            sudo journalctl -u "trusttunnel*" -n 50 --no-pager
-            ;;
-        5)
-            return
-            ;;
-        *)
-            print_error "Invalid choice"
-            ;;
-    esac
-    
-    echo ""
-    echo -e "${YELLOW}Press Enter to return...${RESET}"
-    read -r
-}
-
-# Function to show advanced management menu
-advanced_management_menu() {
-    while true; do
-        clear
-        echo ""
-        draw_line "$MAGENTA" "=" 40
-        echo -e "${MAGENTA}        ⚙️ Advanced Management${RESET}"
-        draw_line "$MAGENTA" "=" 40
-        echo ""
-        echo -e "  ${YELLOW}1)${RESET} ${WHITE}SSL Auto-Renewal Setup${RESET}"
-        echo -e "  ${YELLOW}2)${RESET} ${WHITE}Service Monitoring Setup${RESET}"
-        echo -e "  ${YELLOW}3)${RESET} ${WHITE}Backup System Setup${RESET}"
-        echo -e "  ${YELLOW}4)${RESET} ${WHITE}View System Logs${RESET}"
-        echo -e "  ${YELLOW}5)${RESET} ${WHITE}Performance Monitoring${RESET}"
-        echo -e "  ${YELLOW}6)${RESET} ${WHITE}Security Hardening${RESET}"
-        echo -e "  ${YELLOW}7)${RESET} ${WHITE}Return to main menu${RESET}"
-        echo ""
-        draw_line "$MAGENTA" "-" 40
-        echo -e "${WHITE}Your choice:${RESET} "
-        read -r adv_choice
-        echo ""
-        
-        case $adv_choice in
-            1)
-                setup_ssl_renewal
-                ;;
-            2)
-                setup_service_monitoring
-                ;;
-            3)
-                setup_backup_system
-                ;;
-            4)
-                view_system_logs
-                ;;
-            5)
-                show_performance_monitoring
-                ;;
-            6)
-                security_hardening_menu
-                ;;
-            7)
-                break
-                ;;
-            *)
-                print_error "Invalid option"
-                echo ""
-                echo -e "${YELLOW}Press Enter to continue...${RESET}"
-                read -r
-                ;;
-        esac
-    done
-}
-
-# Function to show performance monitoring
-show_performance_monitoring() {
-    clear
-    echo ""
-    draw_line "$CYAN" "=" 40
-    echo -e "${CYAN}        📈 Performance Monitoring${RESET}"
-    draw_line "$CYAN" "=" 40
-    echo ""
-    
-    echo -e "${CYAN}🖥️ System Resources:${RESET}"
-    echo -e "${WHITE}CPU Usage:${RESET}"
-    top -bn1 | grep "Cpu(s)" | awk '{print $2}' | sed 's/%us,//'
-    
-    echo -e "${WHITE}Memory Usage:${RESET}"
-    free -h | grep "Mem:"
-    
-    echo -e "${WHITE}Disk Usage:${RESET}"
-    df -h | grep -E "/$|/opt|/var"
-    
-    echo ""
-    echo -e "${CYAN}🌐 Network Connections:${RESET}"
-    netstat -tuln | grep -E ":6060|:8800|:8801|:8802|:8803|:8804|:8805" | head -10
-    
-    echo ""
-    echo -e "${CYAN}📊 Service Resource Usage:${RESET}"
-    
-    # Check TrustTunnel processes
-    local trusttunnel_pids=$(pgrep -f "rstun" 2>/dev/null || echo "")
-    if [ -n "$trusttunnel_pids" ]; then
-        echo -e "${WHITE}TrustTunnel Processes:${RESET}"
-        ps -p $trusttunnel_pids -o pid,ppid,cmd,%mem,%cpu --no-headers 2>/dev/null || echo "No processes found"
-    else
-        echo -e "${YELLOW}No TrustTunnel processes running${RESET}"
-    fi
-    
-    echo ""
-    echo -e "${YELLOW}Press Enter to return...${RESET}"
-    read -r
-}
-
-# Function to show security hardening menu
-security_hardening_menu() {
-    clear
-    echo ""
-    draw_line "$RED" "=" 40
-    echo -e "${RED}        🔒 Security Hardening${RESET}"
-    draw_line "$RED" "=" 40
-    echo ""
-    
-    echo -e "${CYAN}🔍 Security Status Check:${RESET}"
-    
-    # Check firewall status
-    local firewall_type=$(detect_firewall)
-    if [ "$firewall_type" != "none" ]; then
-        echo -e "${GREEN}✅ Firewall: $firewall_type active${RESET}"
-    else
-        echo -e "${RED}❌ Firewall: Not detected${RESET}"
-    fi
-    
-    # Check SSL certificates
-    local ssl_certs=$(sudo find /etc/letsencrypt/live -name "*.pem" 2>/dev/null | wc -l)
-    if [ "$ssl_certs" -gt 0 ]; then
-        echo -e "${GREEN}✅ SSL Certificates: $ssl_certs found${RESET}"
-    else
-        echo -e "${YELLOW}⚠️ SSL Certificates: None found${RESET}"
-    fi
-    
-    # Check service permissions
-    local service_files=$(find /etc/systemd/system -name "trusttunnel*.service" 2>/dev/null)
-    if [ -n "$service_files" ]; then
-        echo -e "${GREEN}✅ Service Files: Properly configured${RESET}"
-    else
-        echo -e "${YELLOW}⚠️ Service Files: None found${RESET}"
-    fi
-    
-    # Check for fail2ban
-    if command_exists fail2ban-server; then
-        echo -e "${GREEN}✅ Fail2ban: Installed${RESET}"
-    else
-        echo -e "${YELLOW}⚠️ Fail2ban: Not installed${RESET}"
-    fi
-    
-    echo ""
-    echo -e "${WHITE}Security Recommendations:${RESET}"
-    echo -e "  ${CYAN}• Keep system updated${RESET}"
-    echo -e "  ${CYAN}• Use strong passwords${RESET}"
-    echo -e "  ${CYAN}• Monitor logs regularly${RESET}"
-    echo -e "  ${CYAN}• Limit SSH access${RESET}"
-    echo -e "  ${CYAN}• Use fail2ban for intrusion prevention${RESET}"
-    
-    echo ""
-    echo -e "${YELLOW}Press Enter to return...${RESET}"
-    read -r
 }
 
 # Run main function
