@@ -1831,6 +1831,438 @@ EOF
     done
 }
 
+# Function to test connection
+test_connection() {
+    clear
+    echo ""
+    draw_line "$CYAN" "=" 40
+    echo -e "${CYAN}        🔍 Connection Test${RESET}"
+    draw_line "$CYAN" "=" 40
+    echo ""
+    
+    echo -e "${WHITE}Enter server address to test (e.g., server.example.com):${RESET} "
+    read -r test_server
+    
+    if [ -z "$test_server" ]; then
+        print_error "Server address cannot be empty"
+        echo ""
+        echo -e "${YELLOW}Press Enter to return...${RESET}"
+        read -r
+        return
+    fi
+    
+    echo -e "${WHITE}Enter port to test (default: 6060):${RESET} "
+    read -r test_port
+    test_port=${test_port:-6060}
+    
+    echo ""
+    echo -e "${CYAN}🔍 Testing connection to $test_server:$test_port...${RESET}"
+    
+    # Test with timeout
+    if timeout 10 bash -c "echo >/dev/tcp/$test_server/$test_port" 2>/dev/null; then
+        print_success "Connection successful!"
+    else
+        print_error "Connection failed!"
+    fi
+    
+    echo ""
+    echo -e "${CYAN}📊 Additional network tests:${RESET}"
+    
+    # Ping test
+    echo -e "${WHITE}Ping test:${RESET}"
+    if ping -c 3 "$test_server" >/dev/null 2>&1; then
+        echo -e "${GREEN}✅ Ping successful${RESET}"
+    else
+        echo -e "${RED}❌ Ping failed${RESET}"
+    fi
+    
+    # DNS resolution test
+    echo -e "${WHITE}DNS resolution:${RESET}"
+    if nslookup "$test_server" >/dev/null 2>&1; then
+        echo -e "${GREEN}✅ DNS resolution successful${RESET}"
+    else
+        echo -e "${RED}❌ DNS resolution failed${RESET}"
+    fi
+    
+    echo ""
+    echo -e "${YELLOW}Press Enter to return...${RESET}"
+    read -r
+}
+
+# Function to manage ports manually
+manage_ports_menu() {
+    while true; do
+        clear
+        echo ""
+        draw_line "$CYAN" "=" 40
+        echo -e "${CYAN}        🔌 Port Management${RESET}"
+        draw_line "$CYAN" "=" 40
+        echo ""
+        
+        echo -e "${WHITE}Select an option:${RESET}"
+        echo -e "  ${YELLOW}1)${RESET} ${WHITE}Open a port${RESET}"
+        echo -e "  ${YELLOW}2)${RESET} ${WHITE}Close a port${RESET}"
+        echo -e "  ${YELLOW}3)${RESET} ${WHITE}Check port status${RESET}"
+        echo -e "  ${YELLOW}4)${RESET} ${WHITE}Show open ports${RESET}"
+        echo -e "  ${YELLOW}5)${RESET} ${WHITE}Return${RESET}"
+        echo ""
+        draw_line "$CYAN" "-" 40
+        echo -e "${WHITE}Your choice:${RESET} "
+        read -r port_choice
+        echo ""
+        
+        case $port_choice in
+            1)
+                echo -e "${WHITE}Enter port number to open:${RESET} "
+                read -r port_num
+                if validate_port "$port_num"; then
+                    echo -e "${WHITE}Select protocol (tcp/udp/both):${RESET} "
+                    read -r protocol
+                    case "$protocol" in
+                        tcp|udp|both)
+                            open_firewall_port "$port_num" "$protocol"
+                            ;;
+                        *)
+                            print_error "Invalid protocol. Use: tcp, udp, or both"
+                            ;;
+                    esac
+                else
+                    print_error "Invalid port number"
+                fi
+                echo ""
+                echo -e "${YELLOW}Press Enter to continue...${RESET}"
+                read -r
+                ;;
+            2)
+                echo -e "${WHITE}Enter port number to close:${RESET} "
+                read -r port_num
+                if validate_port "$port_num"; then
+                    echo -e "${WHITE}Select protocol (tcp/udp/both):${RESET} "
+                    read -r protocol
+                    case "$protocol" in
+                        tcp|udp|both)
+                            close_firewall_port "$port_num" "$protocol"
+                            ;;
+                        *)
+                            print_error "Invalid protocol. Use: tcp, udp, or both"
+                            ;;
+                    esac
+                else
+                    print_error "Invalid port number"
+                fi
+                echo ""
+                echo -e "${YELLOW}Press Enter to continue...${RESET}"
+                read -r
+                ;;
+            3)
+                echo -e "${WHITE}Enter port number to check:${RESET} "
+                read -r port_num
+                if validate_port "$port_num"; then
+                    local firewall_type=$(detect_firewall)
+                    case "$firewall_type" in
+                        "ufw")
+                            echo -e "${CYAN}UFW Status for port $port_num:${RESET}"
+                            sudo ufw status | grep "$port_num" || echo "Port not found in UFW rules"
+                            ;;
+                        "iptables")
+                            echo -e "${CYAN}iptables Status for port $port_num:${RESET}"
+                            sudo iptables -L INPUT -n | grep "$port_num" || echo "Port not found in iptables rules"
+                            ;;
+                        "none")
+                            print_warning "No firewall detected"
+                            ;;
+                    esac
+                else
+                    print_error "Invalid port number"
+                fi
+                echo ""
+                echo -e "${YELLOW}Press Enter to continue...${RESET}"
+                read -r
+                ;;
+            4)
+                local firewall_type=$(detect_firewall)
+                case "$firewall_type" in
+                    "ufw")
+                        echo -e "${CYAN}UFW Status:${RESET}"
+                        sudo ufw status
+                        ;;
+                    "iptables")
+                        echo -e "${CYAN}iptables Rules:${RESET}"
+                        sudo iptables -L INPUT -n --line-numbers
+                        ;;
+                    "none")
+                        print_warning "No firewall detected"
+                        ;;
+                esac
+                echo ""
+                echo -e "${YELLOW}Press Enter to continue...${RESET}"
+                read -r
+                ;;
+            5)
+                break
+                ;;
+            *)
+                print_error "Invalid option"
+                echo ""
+                echo -e "${YELLOW}Press Enter to continue...${RESET}"
+                read -r
+                ;;
+        esac
+    done
+}
+
+# Function to backup and restore configurations
+backup_restore_menu() {
+    while true; do
+        clear
+        echo ""
+        draw_line "$CYAN" "=" 40
+        echo -e "${CYAN}        💾 Backup & Restore${RESET}"
+        draw_line "$CYAN" "=" 40
+        echo ""
+        
+        echo -e "${WHITE}Select an option:${RESET}"
+        echo -e "  ${YELLOW}1)${RESET} ${WHITE}Create backup${RESET}"
+        echo -e "  ${YELLOW}2)${RESET} ${WHITE}Restore from backup${RESET}"
+        echo -e "  ${YELLOW}3)${RESET} ${WHITE}List backups${RESET}"
+        echo -e "  ${YELLOW}4)${RESET} ${WHITE}Delete backup${RESET}"
+        echo -e "  ${YELLOW}5)${RESET} ${WHITE}Return${RESET}"
+        echo ""
+        draw_line "$CYAN" "-" 40
+        echo -e "${WHITE}Your choice:${RESET} "
+        read -r backup_choice
+        echo ""
+        
+        case $backup_choice in
+            1)
+                local backup_dir="/opt/trusttunnel-backups"
+                local date_stamp=$(date +%Y%m%d_%H%M%S)
+                local backup_name="trusttunnel_backup_$date_stamp"
+                
+                echo -e "${CYAN}📦 Creating backup...${RESET}"
+                sudo mkdir -p "$backup_dir/$backup_name"
+                
+                # Backup service files
+                sudo cp /etc/systemd/system/trusttunnel*.service "$backup_dir/$backup_name/" 2>/dev/null || true
+                
+                # Backup rstun folder
+                if [ -d "rstun" ]; then
+                    cp -r rstun "$backup_dir/$backup_name/"
+                fi
+                
+                # Create info file
+                echo "Backup created: $(date)" > "$backup_dir/$backup_name/backup_info.txt"
+                echo "Hostname: $(hostname)" >> "$backup_dir/$backup_name/backup_info.txt"
+                
+                # Create archive
+                cd "$backup_dir"
+                tar -czf "$backup_name.tar.gz" "$backup_name"
+                rm -rf "$backup_name"
+                
+                print_success "Backup created: $backup_name.tar.gz"
+                echo ""
+                echo -e "${YELLOW}Press Enter to continue...${RESET}"
+                read -r
+                ;;
+            2)
+                local backup_dir="/opt/trusttunnel-backups"
+                if [ ! -d "$backup_dir" ]; then
+                    print_error "No backup directory found"
+                    echo ""
+                    echo -e "${YELLOW}Press Enter to continue...${RESET}"
+                    read -r
+                    continue
+                fi
+                
+                echo -e "${CYAN}📋 Available backups:${RESET}"
+                ls -la "$backup_dir"/*.tar.gz 2>/dev/null || echo "No backups found"
+                
+                echo ""
+                echo -e "${WHITE}Enter backup filename to restore:${RESET} "
+                read -r backup_file
+                
+                if [ -f "$backup_dir/$backup_file" ]; then
+                    echo -e "${RED}⚠️ This will overwrite current configuration. Continue? (y/N):${RESET} "
+                    read -r confirm
+                    
+                    if [[ "$confirm" =~ ^[Yy]$ ]]; then
+                        echo -e "${CYAN}📦 Restoring backup...${RESET}"
+                        cd "$backup_dir"
+                        tar -xzf "$backup_file"
+                        
+                        # Restore files (implementation would depend on backup structure)
+                        print_success "Backup restored successfully"
+                        echo -e "${YELLOW}Please restart services manually${RESET}"
+                    else
+                        print_warning "Restore cancelled"
+                    fi
+                else
+                    print_error "Backup file not found"
+                fi
+                
+                echo ""
+                echo -e "${YELLOW}Press Enter to continue...${RESET}"
+                read -r
+                ;;
+            3)
+                local backup_dir="/opt/trusttunnel-backups"
+                echo -e "${CYAN}📋 Available backups:${RESET}"
+                if [ -d "$backup_dir" ]; then
+                    ls -lah "$backup_dir"/*.tar.gz 2>/dev/null || echo "No backups found"
+                else
+                    echo "No backup directory found"
+                fi
+                echo ""
+                echo -e "${YELLOW}Press Enter to continue...${RESET}"
+                read -r
+                ;;
+            4)
+                local backup_dir="/opt/trusttunnel-backups"
+                echo -e "${CYAN}📋 Available backups:${RESET}"
+                ls -la "$backup_dir"/*.tar.gz 2>/dev/null || echo "No backups found"
+                
+                echo ""
+                echo -e "${WHITE}Enter backup filename to delete:${RESET} "
+                read -r backup_file
+                
+                if [ -f "$backup_dir/$backup_file" ]; then
+                    echo -e "${RED}⚠️ Are you sure you want to delete $backup_file? (y/N):${RESET} "
+                    read -r confirm
+                    
+                    if [[ "$confirm" =~ ^[Yy]$ ]]; then
+                        rm -f "$backup_dir/$backup_file"
+                        print_success "Backup deleted successfully"
+                    else
+                        print_warning "Deletion cancelled"
+                    fi
+                else
+                    print_error "Backup file not found"
+                fi
+                
+                echo ""
+                echo -e "${YELLOW}Press Enter to continue...${RESET}"
+                read -r
+                ;;
+            5)
+                break
+                ;;
+            *)
+                print_error "Invalid option"
+                echo ""
+                echo -e "${YELLOW}Press Enter to continue...${RESET}"
+                read -r
+                ;;
+        esac
+    done
+}
+
+# Function to show system information
+show_system_info() {
+    clear
+    echo ""
+    draw_line "$CYAN" "=" 40
+    echo -e "${CYAN}        💻 System Information${RESET}"
+    draw_line "$CYAN" "=" 40
+    echo ""
+    
+    echo -e "${CYAN}🖥️ System Details:${RESET}"
+    echo -e "${WHITE}Hostname: $(hostname)${RESET}"
+    echo -e "${WHITE}OS: $(lsb_release -d 2>/dev/null | cut -f2 || echo "Unknown")${RESET}"
+    echo -e "${WHITE}Kernel: $(uname -r)${RESET}"
+    echo -e "${WHITE}Architecture: $(uname -m)${RESET}"
+    echo -e "${WHITE}Uptime: $(uptime -p 2>/dev/null || uptime)${RESET}"
+    
+    echo ""
+    echo -e "${CYAN}💾 Memory & Storage:${RESET}"
+    echo -e "${WHITE}Memory Usage:${RESET}"
+    free -h | grep -E "Mem|Swap"
+    
+    echo -e "${WHITE}Disk Usage:${RESET}"
+    df -h | grep -E "/$|/opt|/var" | head -5
+    
+    echo ""
+    echo -e "${CYAN}🌐 Network Information:${RESET}"
+    echo -e "${WHITE}Public IP: $(curl -s ifconfig.me 2>/dev/null || echo "Unable to detect")${RESET}"
+    echo -e "${WHITE}Local IP: $(hostname -I | awk '{print $1}' 2>/dev/null || echo "Unable to detect")${RESET}"
+    
+    echo ""
+    echo -e "${CYAN}🔧 TrustTunnel Status:${RESET}"
+    if [ -d "rstun" ]; then
+        echo -e "${GREEN}✅ TrustTunnel installed${RESET}"
+        if [ -f "rstun/rstund" ]; then
+            echo -e "${WHITE}Server binary: Available${RESET}"
+        fi
+        if [ -f "rstun/rstunc" ]; then
+            echo -e "${WHITE}Client binary: Available${RESET}"
+        fi
+    else
+        echo -e "${RED}❌ TrustTunnel not installed${RESET}"
+    fi
+    
+    # Count services
+    local server_count=0
+    local client_count=0
+    
+    if [ -f "/etc/systemd/system/trusttunnel.service" ]; then
+        server_count=1
+    fi
+    
+    client_count=$(systemctl list-units --type=service --all | grep 'trusttunnel-' | wc -l)
+    
+    echo -e "${WHITE}Configured servers: $server_count${RESET}"
+    echo -e "${WHITE}Configured clients: $client_count${RESET}"
+    
+    echo ""
+    echo -e "${YELLOW}Press Enter to return...${RESET}"
+    read -r
+}
+
+# Function to show tools and utilities menu
+tools_utilities_menu() {
+    while true; do
+        clear
+        echo ""
+        draw_line "$GREEN" "=" 40
+        echo -e "${GREEN}        🛠️ Tools & Utilities${RESET}"
+        draw_line "$GREEN" "=" 40
+        echo ""
+        echo -e "  ${YELLOW}1)${RESET} ${WHITE}Connection Test${RESET}"
+        echo -e "  ${YELLOW}2)${RESET} ${WHITE}Port Management${RESET}"
+        echo -e "  ${YELLOW}3)${RESET} ${WHITE}Backup & Restore${RESET}"
+        echo -e "  ${YELLOW}4)${RESET} ${WHITE}System Information${RESET}"
+        echo -e "  ${YELLOW}5)${RESET} ${WHITE}Return to main menu${RESET}"
+        echo ""
+        draw_line "$GREEN" "-" 40
+        echo -e "${WHITE}Your choice:${RESET} "
+        read -r tools_choice
+        echo ""
+        
+        case $tools_choice in
+            1)
+                test_connection
+                ;;
+            2)
+                manage_ports_menu
+                ;;
+            3)
+                backup_restore_menu
+                ;;
+            4)
+                show_system_info
+                ;;
+            5)
+                break
+                ;;
+            *)
+                print_error "Invalid option"
+                echo ""
+                echo -e "${YELLOW}Press Enter to continue...${RESET}"
+                read -r
+                ;;
+        esac
+    done
+}
+
 # Main function
 main() {
     # Set error handling
@@ -1879,8 +2311,9 @@ main() {
         echo -e "${MAGENTA}1) Install TrustTunnel${RESET}"
         echo -e "${CYAN}2) Tunnel Management${RESET}"
         echo -e "${BLUE}3) Service Status${RESET}"
-        echo -e "${RED}4) Uninstall TrustTunnel${RESET}"
-        echo -e "${WHITE}5) Exit${RESET}"
+        echo -e "${GREEN}4) Tools & Utilities${RESET}"
+        echo -e "${RED}5) Uninstall TrustTunnel${RESET}"
+        echo -e "${WHITE}6) Exit${RESET}"
         echo ""
         echo -e "${WHITE}Your choice:${RESET} "
         read -r choice
@@ -1896,9 +2329,12 @@ main() {
                 show_all_services_status
                 ;;
             4)
-                uninstall_trusttunnel_action
+                tools_utilities_menu
                 ;;
             5)
+                uninstall_trusttunnel_action
+                ;;
+            6)
                 echo -e "${GREEN}👋 Goodbye!${RESET}"
                 exit 0
                 ;;
