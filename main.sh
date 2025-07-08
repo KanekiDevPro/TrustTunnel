@@ -362,13 +362,20 @@ validate_port() {
 
 # Function to detect firewall type
 detect_firewall() {
-    if command_exists ufw && ufw status >/dev/null 2>&1; then
-        echo "ufw"
-    elif command_exists iptables; then
-        echo "iptables"
-    else
-        echo "none"
+    if command_exists ufw; then
+        # Check if UFW is actually active
+        if sudo ufw status | grep -q "Status: active"; then
+            echo "ufw"
+            return
+        fi
     fi
+    
+    if command_exists iptables; then
+        echo "iptables"
+        return
+    fi
+    
+    echo "none"
 }
 
 # Function to open port in firewall
@@ -392,29 +399,40 @@ open_firewall_port() {
                     sudo ufw allow "$port/udp" >/dev/null 2>&1
                     ;;
             esac
-            print_success "Port $port ($protocol) opened in UFW"
+            
+            # Also add to iptables as backup
+            case "$protocol" in
+                "tcp")
+                    sudo iptables -I INPUT -p tcp --dport "$port" -j ACCEPT >/dev/null 2>&1
+                    ;;
+                "udp")
+                    sudo iptables -I INPUT -p udp --dport "$port" -j ACCEPT >/dev/null 2>&1
+                    ;;
+                "both")
+                    sudo iptables -I INPUT -p tcp --dport "$port" -j ACCEPT >/dev/null 2>&1
+                    sudo iptables -I INPUT -p udp --dport "$port" -j ACCEPT >/dev/null 2>&1
+                    ;;
+            esac
+            
+            print_success "Port $port ($protocol) opened in UFW and iptables"
             ;;
         "iptables")
             echo -e "${CYAN}🔥 Opening port $port ($protocol) in iptables firewall...${RESET}"
             case "$protocol" in
                 "tcp")
-                    sudo iptables -A INPUT -p tcp --dport "$port" -j ACCEPT >/dev/null 2>&1
+                    sudo iptables -I INPUT -p tcp --dport "$port" -j ACCEPT >/dev/null 2>&1
                     ;;
                 "udp")
-                    sudo iptables -A INPUT -p udp --dport "$port" -j ACCEPT >/dev/null 2>&1
+                    sudo iptables -I INPUT -p udp --dport "$port" -j ACCEPT >/dev/null 2>&1
                     ;;
                 "both")
-                    sudo iptables -A INPUT -p tcp --dport "$port" -j ACCEPT >/dev/null 2>&1
-                    sudo iptables -A INPUT -p udp --dport "$port" -j ACCEPT >/dev/null 2>&1
+                    sudo iptables -I INPUT -p tcp --dport "$port" -j ACCEPT >/dev/null 2>&1
+                    sudo iptables -I INPUT -p udp --dport "$port" -j ACCEPT >/dev/null 2>&1
                     ;;
             esac
             
             # Save iptables rules
-            if command_exists iptables-save && command_exists netfilter-persistent; then
-                sudo netfilter-persistent save >/dev/null 2>&1
-            elif [ -f /etc/iptables/rules.v4 ]; then
-                sudo iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
-            fi
+            save_iptables_rules
             
             print_success "Port $port ($protocol) opened in iptables"
             ;;
@@ -436,16 +454,20 @@ close_firewall_port() {
             case "$protocol" in
                 "tcp")
                     sudo ufw delete allow "$port/tcp" >/dev/null 2>&1
+                    sudo iptables -D INPUT -p tcp --dport "$port" -j ACCEPT >/dev/null 2>&1
                     ;;
                 "udp")
                     sudo ufw delete allow "$port/udp" >/dev/null 2>&1
+                    sudo iptables -D INPUT -p udp --dport "$port" -j ACCEPT >/dev/null 2>&1
                     ;;
                 "both")
                     sudo ufw delete allow "$port/tcp" >/dev/null 2>&1
                     sudo ufw delete allow "$port/udp" >/dev/null 2>&1
+                    sudo iptables -D INPUT -p tcp --dport "$port" -j ACCEPT >/dev/null 2>&1
+                    sudo iptables -D INPUT -p udp --dport "$port" -j ACCEPT >/dev/null 2>&1
                     ;;
             esac
-            print_success "Port $port ($protocol) closed in UFW"
+            print_success "Port $port ($protocol) closed in UFW and iptables"
             ;;
         "iptables")
             echo -e "${CYAN}🔥 Closing port $port ($protocol) in iptables firewall...${RESET}"
@@ -463,11 +485,7 @@ close_firewall_port() {
             esac
             
             # Save iptables rules
-            if command_exists iptables-save && command_exists netfilter-persistent; then
-                sudo netfilter-persistent save >/dev/null 2>&1
-            elif [ -f /etc/iptables/rules.v4 ]; then
-                sudo iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
-            fi
+            save_iptables_rules
             
             print_success "Port $port ($protocol) closed in iptables"
             ;;
@@ -475,6 +493,17 @@ close_firewall_port() {
             print_warning "No supported firewall detected (UFW/iptables)"
             ;;
     esac
+}
+
+# Function to save iptables rules
+save_iptables_rules() {
+    if command_exists iptables-save && command_exists netfilter-persistent; then
+        sudo netfilter-persistent save >/dev/null 2>&1
+    elif [ -f /etc/iptables/rules.v4 ]; then
+        sudo iptables-save | sudo tee /etc/iptables/rules.v4 >/dev/null 2>&1
+    elif command_exists iptables-persistent; then
+        sudo service iptables-persistent save >/dev/null 2>&1
+    fi
 }
 
 # Function to ask user about firewall configuration
@@ -1257,27 +1286,49 @@ check_firewall_ports() {
         "ufw")
             echo -e "${WHITE}Firewall Type: UFW${RESET}"
             
+            # Check UFW status first
+            local ufw_status=$(sudo ufw status 2>/dev/null)
+            
             if [ -n "$listen_port" ]; then
-                if sudo ufw status | grep -q "$listen_port/tcp"; then
-                    echo -e "${GREEN}🟢 Port $listen_port/tcp: Open${RESET}"
+                if echo "$ufw_status" | grep -q "$listen_port/tcp\|$listen_port "; then
+                    echo -e "${GREEN}🟢 Port $listen_port/tcp: Open in UFW${RESET}"
                 else
-                    echo -e "${RED}🔴 Port $listen_port/tcp: Closed${RESET}"
+                    echo -e "${RED}🔴 Port $listen_port/tcp: Closed in UFW${RESET}"
+                fi
+                
+                # Also check iptables
+                if sudo iptables -L INPUT -n | grep -q "dpt:$listen_port.*tcp"; then
+                    echo -e "${GREEN}🟢 Port $listen_port/tcp: Open in iptables${RESET}"
+                else
+                    echo -e "${RED}🔴 Port $listen_port/tcp: Closed in iptables${RESET}"
                 fi
             fi
             
             if [ -n "$tcp_port" ] && [ "$tcp_port" != "$listen_port" ]; then
-                if sudo ufw status | grep -q "$tcp_port/tcp"; then
-                    echo -e "${GREEN}🟢 Port $tcp_port/tcp: Open${RESET}"
+                if echo "$ufw_status" | grep -q "$tcp_port/tcp\|$tcp_port "; then
+                    echo -e "${GREEN}🟢 Port $tcp_port/tcp: Open in UFW${RESET}"
                 else
-                    echo -e "${RED}🔴 Port $tcp_port/tcp: Closed${RESET}"
+                    echo -e "${RED}🔴 Port $tcp_port/tcp: Closed in UFW${RESET}"
+                fi
+                
+                if sudo iptables -L INPUT -n | grep -q "dpt:$tcp_port.*tcp"; then
+                    echo -e "${GREEN}🟢 Port $tcp_port/tcp: Open in iptables${RESET}"
+                else
+                    echo -e "${RED}🔴 Port $tcp_port/tcp: Closed in iptables${RESET}"
                 fi
             fi
             
             if [ -n "$udp_port" ] && [ "$udp_port" != "$listen_port" ] && [ "$udp_port" != "$tcp_port" ]; then
-                if sudo ufw status | grep -q "$udp_port/udp"; then
-                    echo -e "${GREEN}🟢 Port $udp_port/udp: Open${RESET}"
+                if echo "$ufw_status" | grep -q "$udp_port/udp\|$udp_port "; then
+                    echo -e "${GREEN}🟢 Port $udp_port/udp: Open in UFW${RESET}"
                 else
-                    echo -e "${RED}🔴 Port $udp_port/udp: Closed${RESET}"
+                    echo -e "${RED}🔴 Port $udp_port/udp: Closed in UFW${RESET}"
+                fi
+                
+                if sudo iptables -L INPUT -n | grep -q "dpt:$udp_port.*udp"; then
+                    echo -e "${GREEN}🟢 Port $udp_port/udp: Open in iptables${RESET}"
+                else
+                    echo -e "${RED}🔴 Port $udp_port/udp: Closed in iptables${RESET}"
                 fi
             fi
             ;;
@@ -1291,11 +1342,87 @@ check_firewall_ports() {
                     echo -e "${RED}🔴 Port $listen_port: Closed${RESET}"
                 fi
             fi
+            
+            if [ -n "$tcp_port" ] && [ "$tcp_port" != "$listen_port" ]; then
+                if sudo iptables -L INPUT -n | grep -q "dpt:$tcp_port"; then
+                    echo -e "${GREEN}🟢 Port $tcp_port: Open${RESET}"
+                else
+                    echo -e "${RED}🔴 Port $tcp_port: Closed${RESET}"
+                fi
+            fi
             ;;
         "none")
             echo -e "${YELLOW}🟡 No firewall detected${RESET}"
             ;;
     esac
+    
+    # Additional check - test if ports are actually listening
+    echo ""
+    echo -e "${CYAN}🔍 Port Listening Status:${RESET}"
+    
+    if [ -n "$listen_port" ]; then
+        if netstat -tuln 2>/dev/null | grep -q ":$listen_port " || ss -tuln 2>/dev/null | grep -q ":$listen_port "; then
+            echo -e "${GREEN}🟢 Port $listen_port: Service is listening${RESET}"
+        else
+            echo -e "${YELLOW}🟡 Port $listen_port: No service listening${RESET}"
+        fi
+    fi
+}
+
+# Function to fix firewall issues
+fix_firewall_issues() {
+    clear
+    echo ""
+    draw_line "$CYAN" "=" 40
+    echo -e "${CYAN}        🔧 Fix Firewall Issues${RESET}"
+    draw_line "$CYAN" "=" 40
+    echo ""
+    
+    echo -e "${CYAN}🔍 Diagnosing firewall issues...${RESET}"
+    
+    local firewall_type=$(detect_firewall)
+    echo -e "${WHITE}Detected firewall: $firewall_type${RESET}"
+    
+    if [ "$firewall_type" = "ufw" ]; then
+        echo ""
+        echo -e "${CYAN}📋 Current UFW status:${RESET}"
+        sudo ufw status verbose
+        
+        echo ""
+        echo -e "${YELLOW}Do you want to enable UFW if it's inactive? (y/N):${RESET} "
+        read -r enable_ufw
+        
+        if [[ "$enable_ufw" =~ ^[Yy]$ ]]; then
+            sudo ufw --force enable
+            print_success "UFW enabled"
+        fi
+        
+        echo ""
+        echo -e "${YELLOW}Do you want to reload UFW rules? (y/N):${RESET} "
+        read -r reload_ufw
+        
+        if [[ "$reload_ufw" =~ ^[Yy]$ ]]; then
+            sudo ufw reload
+            print_success "UFW rules reloaded"
+        fi
+    fi
+    
+    echo ""
+    echo -e "${CYAN}📋 Current iptables rules:${RESET}"
+    sudo iptables -L INPUT -n --line-numbers | head -20
+    
+    echo ""
+    echo -e "${YELLOW}Do you want to save current iptables rules? (y/N):${RESET} "
+    read -r save_rules
+    
+    if [[ "$save_rules" =~ ^[Yy]$ ]]; then
+        save_iptables_rules
+        print_success "iptables rules saved"
+    fi
+    
+    echo ""
+    echo -e "${YELLOW}Press Enter to return...${RESET}"
+    read -r
 }
 
 # Function to show all services status
@@ -2230,7 +2357,8 @@ tools_utilities_menu() {
         echo -e "  ${YELLOW}2)${RESET} ${WHITE}Port Management${RESET}"
         echo -e "  ${YELLOW}3)${RESET} ${WHITE}Backup & Restore${RESET}"
         echo -e "  ${YELLOW}4)${RESET} ${WHITE}System Information${RESET}"
-        echo -e "  ${YELLOW}5)${RESET} ${WHITE}Return to main menu${RESET}"
+        echo -e "  ${YELLOW}5)${RESET} ${WHITE}Fix Firewall Issues${RESET}"
+        echo -e "  ${YELLOW}6)${RESET} ${WHITE}Return to main menu${RESET}"
         echo ""
         draw_line "$GREEN" "-" 40
         echo -e "${WHITE}Your choice:${RESET} "
@@ -2251,6 +2379,9 @@ tools_utilities_menu() {
                 show_system_info
                 ;;
             5)
+                fix_firewall_issues
+                ;;
+            6)
                 break
                 ;;
             *)
