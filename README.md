@@ -14,6 +14,10 @@ bash <(curl -Ls https://raw.githubusercontent.com/KanekiDevPro/TrustTunnel/main/
 bash <(curl -Ls https://raw.githubusercontent.com/KanekiDevPro/TrustTunnel/main/main-old.sh)
 ```
 
+```
+bash <(curl -Ls https://raw.githubusercontent.com/KanekiDevPro/TrustTunnel/main/beta.sh)
+```
+
 ## How to use ?
 [![Watch the video](https://img.youtube.com/vi/mwQJ4_pYLNc/hqdefault.jpg)](https://youtu.be/mwQJ4_pYLNc)
 ## ⚙️ Features
